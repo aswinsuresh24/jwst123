@@ -286,3 +286,79 @@ def pick_deepest_images(images, reffilter=None, avoid_wfpc2=False, refinst=None)
             reference_images.append(im)
 
     return(reference_images)
+
+def input_list(input_images):
+    img = input_images
+    zptype = 'abmag'
+    good = []
+    image_number = []
+    #check if image exists (check in archive otherwise)
+    for image in img:
+        success = True
+        if not os.path.exists(image):
+            success = False
+        if success:
+            good.append(image)
+    img = copy.copy(good)
+
+    hdu = fits.open(img[0])
+    h = hdu[0].header
+
+    exp = [fits.getval(image,'EXPTIME') for image in img] #exposure time
+    if 'DATE-OBS' in h.keys() and 'TIME-OBS' in h.keys(): 
+        dat = [fits.getval(image,'DATE-OBS') + 'T' +
+               fits.getval(image,'TIME-OBS') for image in img] #datetime
+    elif 'EXPSTART' in h.keys():
+        dat = [Time(fits.getval(image, 'EXPSTART'),
+            format='mjd').datetime.strftime('%Y-%m-%dT%H:%M:%S') #datetime if DATE-OBS is missing
+            for image in img]
+
+    fil = [get_filter(image) for image in img]
+    ins = [get_instrument(image) for image in img]
+    det = ['_'.join(get_instrument(image).split('_')[:2]) for image in img]
+    chip= [get_chip(image) for image in img]
+    zpt = [get_zpt(i, ccdchip=c, zptype=zptype) for i,c in zip(img,chip)]
+
+    if not image_number:
+        image_number = [0 for image in img]
+
+    obstable = Table([img,exp,dat,fil,ins,det,zpt,chip,image_number],
+        names=['image','exptime','datetime','filter','instrument',
+         'detector','zeropoint','chip','imagenumber'])
+    obstable.sort('datetime')
+    obstable = add_visit_info(obstable)
+    
+    obstable.add_column(Column([' '*99]*len(obstable), name='drizname'))
+    for i,row in enumerate(obstable):
+        visit = row['visit']
+        n = str(visit).zfill(4)
+        inst = row['instrument']
+        filt = row['filter']
+
+        # Visit should correspond to first image so they're all the same
+        visittable = obstable[obstable['visit']==visit]
+        refimage = visittable['image'][0]
+        if 'DATE-OBS' in h.keys():
+            date_obj = Time(fits.getval(refimage, 'DATE-OBS'))
+        else:
+            date_obj = Time(fits.getval(refimage, 'EXPSTART'), format='mjd')
+        date_str = date_obj.datetime.strftime('%y%m%d')
+
+        # Make a photpipe-like image name
+        drizname = ''
+        objname = None
+        if objname:
+            drizname = '{obj}.{inst}.{filt}.ut{date}_{n}.drz.fits'
+            drizname = drizname.format(inst=inst.split('_')[0],
+                filt=filt, n=n, date=date_str, obj=objname)
+        else:
+            drizname = '{inst}.{filt}.ut{date}_{n}.drz.fits'
+            drizname = drizname.format(inst=inst.split('_')[0],
+                filt=filt, n=n, date=date_str)
+
+        if '.':
+            drizname = os.path.join('.', drizname)
+
+        obstable[i]['drizname'] = drizname
+        
+    return obstable
