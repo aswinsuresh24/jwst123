@@ -1,2 +1,13 @@
 *.pyc
 __pycache__
+.ipynb_checkpoints/
+.vscode/
+mastDownload/
+raw/
+*jwstred*/
+*temp*/
+*.fits
+*.coo
+*.log
+*.txt
+*.csv

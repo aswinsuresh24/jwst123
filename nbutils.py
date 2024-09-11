@@ -250,7 +250,7 @@ def pick_deepest_images(images, reffilter=None, avoid_wfpc2=False, refinst=None)
         for im in images:
             if (get_filter(im) in val and
                 get_instrument(im).split('_')[0] in val):
-                exposure += fits.getval(im,'EXPTIME')
+                exposure += fits.getval(im,'EFFEXPTM')
         total_exposure.append(exposure)
 
     best_filt_inst = ''
@@ -304,7 +304,7 @@ def input_list(input_images):
     hdu = fits.open(img[0])
     h = hdu[0].header
 
-    exp = [fits.getval(image,'EXPTIME') for image in img] #exposure time
+    exp = [fits.getval(image,'EFFEXPTM') for image in img] #exposure time
     if 'DATE-OBS' in h.keys() and 'TIME-OBS' in h.keys(): 
         dat = [fits.getval(image,'DATE-OBS') + 'T' +
                fits.getval(image,'TIME-OBS') for image in img] #datetime
