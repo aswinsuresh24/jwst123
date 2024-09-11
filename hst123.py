@@ -1411,7 +1411,7 @@ class hst123(object):
             return(warning.format(img=image), False)
 
         mask = self.productlist['productFilename']==image
-        if self.productlist[mask]==0:
+        if self.productlist[mask]==0: #len?
             warning = 'WARNING: could not find or download {img}'
             return(warning.format(img=image), False)
 
@@ -1842,9 +1842,9 @@ class hst123(object):
     total_exposure = []
     for val in unique_filter_inst:
         exposure = 0
-        for im in self.input_images:
+        for im in self.input_images: #all input images? not just images from argument?
             if (self.get_filter(im) in val and
-                self.get_instrument(im).split('_')[0] in val):
+                self.get_instrument(im).split('_')[0] in val): #handle different sub-instruments
                 exposure += fits.getval(im,'EXPTIME')
         total_exposure.append(exposure)
 
@@ -1952,7 +1952,7 @@ class hst123(object):
     if len(obstable)<3 and not self.options['args'].no_mask:
         inst = obstable['instrument'][0]
         det = obstable['detector'][0]
-        mask = (obstable['instrument']==inst) & (obstable['detector']==det)
+        mask = (obstable['instrument']==inst) & (obstable['detector']==det) #how does this help?
 
         outimage = '{inst}.ref.drz.fits'.format(inst=inst)
 
@@ -2573,7 +2573,7 @@ class hst123(object):
         if len(idxIm)>0:
             newhdu = fits.HDUList()
             newhdu.append(hdu[np.min(idxIm)])
-            newhdu.append(hdu[np.min(idxIm)])
+            newhdu.append(hdu[np.min(idxIm)]) # should this be SCI hdu?
             newhdu[0].data = None
 
             # If there is a primary extension, overwrite the header vars
@@ -2677,7 +2677,7 @@ class hst123(object):
 
     return(nsources)
 
-  def count_nsources(self, image):
+  def count_nsources(self, images):
     cat_str = '_sci*_xy_catalog.coo'
     # Tag cat files with the threshold so we can reference it later
     n = 0
@@ -2851,7 +2851,7 @@ class hst123(object):
         [np.nan]*len(run_images)], names=('file','xoffset','yoffset'))
 
     # Check if we just removed all of the images
-    if not run_images:
+    if not run_images: #not needed
         warning = 'WARNING: All images have been run through tweakreg.'
         print(warning)
         return(True)
@@ -3640,7 +3640,7 @@ class hst123(object):
                         maskfile = file.split('_')[0]+'_c1m.fits'
                         if os.path.exists(maskfile):
                             maskhdu = fits.open(maskfile)
-                            self.copy_wcs_keys(rawhdu[i], maskhdu[i])
+                            self.copy_wcs_keys(hdu[i], maskhdu[i])
                             maskhdu.writeto(maskfile, overwrite=True)
 
                 hdu.close()
@@ -3790,7 +3790,7 @@ class hst123(object):
         with open(dp['fakelist'], 'w') as fakelist:
             magmin = gopt['mag_min']
             dm = (gopt['mag_max'] - magmin)/(gopt['nstars'])
-            for i in np.arange(par['nstars']):
+            for i in np.arange(gopt['nstars']):
                 # Each row needs to look like "0 1 x y mag1 mag2... magN" where
                 # N=Nimg in original dolphot param file
                 line = '0 1 {x} {y} '.format(x=x, y=y)
@@ -3807,7 +3807,7 @@ class hst123(object):
             self.generate_base_param_file(dfile, defaults, Nimg)
 
             # Write reference image to param file
-            self.add_image_to_param_file(dfile, ref, 0, defaults)
+            self.add_image_to_param_file(dfile, refname, 0, defaults)
 
             # Write out image-specific params to dolphot file
             for i,row in enumerate(obstable):
@@ -3941,7 +3941,7 @@ if __name__ == '__main__':
     # Check there are still images that need to be reduced
     if len(hst.input_images)>0:
 
-        # Get metadata on all input images and put them into an obstable
+        # Get metadata on all input images and put thby-visitem into an obstable
         Util.make_banner('Organizing input images by visit')
         # Going forward, we'll refer everything to obstable for imgs + metadata
         table = hst.input_list(hst.input_images, show=True)
