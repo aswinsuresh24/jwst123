@@ -23,6 +23,8 @@ from astropy.time import Time
 from astroscrappy import detect_cosmics
 from stwcs import updatewcs
 from scipy.interpolate import interp1d
+import pandas as pd
+from astropy.coordinates import SkyCoord
 
 # Internal dependencies
 from common import Constants
@@ -362,3 +364,32 @@ def input_list(input_images):
         obstable[i]['drizname'] = drizname
         
     return obstable
+
+def xmatch_common(skycrd_1, skycrd_2, dist_limit = 5.0):
+    """
+    crossmatch sources between two SkyCoord objects
+    
+    Parameters
+    ------------
+    
+    skycrd_1 : SkyCoord
+        positions of sources in catalog 1 as a SkyCoord object
+    skycrd_2 : SkyCoord
+        positions of sources in catalog 2 as a SkyCoord object
+    dist_limit : float
+        maximum distance for a match, in arcsec
+        
+    Returns
+    ------------
+    
+    dist_matched_df : pd.DataFrame
+        dataframe containing three columns with indices in catalog 1, 
+        indices in catalog 2 and distances in arcsec respectively
+    """
+    idx, d2d, d3d = skycrd_1.match_to_catalog_sky(skycrd_2)
+    d = {'idx_1' : np.arange(0, len(skycrd_1)), 'idx_2' : idx, 'd2d': d2d.to(u.arcsec)}
+    xmatch_df = pd.DataFrame(data=d)
+    matched_df = xmatch_df.loc[xmatch_df.groupby('idx_2').d2d.idxmin()]
+    dist_matched_df = matched_df[matched_df['d2d'] < dist_limit*u.arcsec]
+    
+    return dist_matched_df
