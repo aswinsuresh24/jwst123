@@ -59,6 +59,47 @@ from jwst.associations import asn_from_list
 from jwst.associations.lib.rules_level3_base import DMS_Level3_Base
 print(f'JWST version: {jwst.__version__}')
 
+base_params = {'FitSky' : '1',
+                'SigPSF' : '5.0',
+                'FlagMask' : '4',
+                'SecondPass' : '1',
+                'PSFPhotIt' : '2',
+                'ApCor' : '1',
+                'FSat' : '0.999',
+                'NoiseMult' : '0.1',
+                'RCombine' : '1.5',
+                'CombineChi' : '0',
+                'MaxIT' : '25',
+                'InterpPSFlib' : '1',
+                'SigFindMult' : '0.85',
+                'PSFPhot' : '1',
+                'Force1' : '0',
+                'SkySig' : '2.25',
+                'SkipSky' : '1',
+                'UseWCS' : '2',
+                'PSFres' : '1',
+                'PosStep' : '0.25'}
+
+short_params = {'shift' : '0 0',
+                'xform' :'1 0 0',
+                'raper' : '2',
+                'rchi' : '1.5',
+                'rsky0' : '15',
+                'rsky1' : '35',
+                'rsky2' : '3 10',
+                'rpsf' : '15',
+                'apsky' : '20 35'}
+
+long_params = {'shift' : '0 0',
+                'xform' :'1 0 0',
+                'raper' : '3',
+                'rchi' : '2.0',
+                'rsky0' : '15',
+                'rsky1' : '35',
+                'rsky2' : '4 10',
+                'rpsf' : '15',
+                'apsky' : '20 35'}
+
 def get_detector_chip(filename):
     fl_split = filename.split('_')
     mask = ['nrc' in x for x in fl_split]
@@ -90,6 +131,32 @@ def calc_cky(files):
         cmd_fl = cmd.format(fits_base=fits_base,rin=rin,rout=rout,
                             step=step,sigma_low=sigma_low,sigma_high=sigma_high)
         subprocess.run(cmd_fl,shell=True)
+
+def generate_dolphot_paramfile(basedir):
+    ref_image = glob.glob(basedir + '/*i2d.fits')
+    if len(ref_image) > 1:
+        raise ValueError('More than one i2d image found')
+    
+    ref_image = ref_image[0]
+    phot_images = glob.glob(basedir + '/*cal.fits')
+    phot_image_base = [os.path.basename(r).replace('.fits', '') for r in phot_images]
+    phot_image_det = ['long' if 'long' in get_detector_chip(r) else 'short' for r in phot_images]
+    N_img = len(phot_images)
+    with open('jwstred_temp_dolphot/m92/nircam/dolphot.param', 'w') as f:
+        f.write('Nimg = {}\n'.format(N_img))
+        f.write('img0_file = {}\n'.format(os.path.basename(ref_image).replace('.fits', '')))
+        # f.write('\n')
+        for i, (img, det) in enumerate(zip(phot_image_base, phot_image_det)):
+            f.write('img{}_file = {}\n'.format(i+1, img))
+            if det == 'short':
+                for key, val in short_params.items():
+                    f.write('img{}_{} = {}\n'.format(i+1, key, val))
+            if det == 'long':
+                for key, val in long_params.items():
+                    f.write('img{}_{} = {}\n'.format(i+1, key, val))
+            # f.write('\n')
+        for key, val in base_params.items():
+            f.write('{} = {}\n'.format(key, val))
 
 
 if __name__ == '__main__':
@@ -215,6 +282,11 @@ if __name__ == '__main__':
     # run nircammask (generalize paths later)
 
     basedir = 'jwstred_temp_dolphot/m92/nircam'
+    generate_dolphot_paramfile(basedir)
+    #switch directory to basedir
+    os.chdir(basedir)
+    #run dolphot
+    subprocess.run('dolphot m92.phot -pdolphot.param', shell=True)
     dolphot_images = glob.glob(basedir + '/*fits')
     apply_nircammask(dolphot_images)
     calc_cky(dolphot_images)
