@@ -6,6 +6,7 @@ mastDownload/
 raw/
 *jwstred*/
 *temp*/
+launch.sh
 *.fits
 *.coo
 *.log
