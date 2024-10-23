@@ -48,33 +48,20 @@ acceptable_filters = [
 def get_filter(image):
     #check jwst header keywords for filters
     #just 'FILTER' may suffice
-    if 'wfpc2' in str(fits.getval(image, 'INSTRUME')).lower():
-        f = str(fits.getval(image, 'FILTNAM1'))
-        if len(f.strip()) == 0:
-            f = str(fits.getval(image, 'FILTNAM2'))
-    else:
-        try:
-            f = str(fits.getval(image, 'FILTER'))
-        except:
-            f = str(fits.getval(image, 'FILTER1'))
-            if 'clear' in f.lower():
-                f = str(fits.getval(image, 'FILTER2'))
+    try:
+        f = str(fits.getval(image, 'FILTER'))
+    except:
+        f = str(fits.getval(image, 'FILTER1'))
+        if 'clear' in f.lower():
+            f = str(fits.getval(image, 'FILTER2'))
     return(f.lower())
 
 def get_instrument(image):
     hdu = fits.open(image, mode='readonly')
     inst = hdu[0].header['INSTRUME'].lower()
-    if inst.upper() == 'WFPC2':
-        det = 'wfpc2'
-        sub = 'full'
-    else:
-        det = hdu[0].header['DETECTOR'].lower()
-        if (str(hdu[0].header['SUBARRAY']) == 'T' or
-           str(hdu[0].header['SUBARRAY']) == 'True'):
-            sub = 'sub'
-        else:
-            sub = 'full'
-    out = f'{inst}_{det}_{sub}'
+    # det = hdu[0].header['DETECTOR'].lower()
+    # out = f'{inst}_{det}'
+    out = f'{inst}'
     return(out)
 
 def get_chip(image):
@@ -317,16 +304,16 @@ def input_list(input_images):
 
     fil = [get_filter(image) for image in img]
     ins = [get_instrument(image) for image in img]
-    det = ['_'.join(get_instrument(image).split('_')[:2]) for image in img]
+    # det = ['_'.join(get_instrument(image).split('_')[:2]) for image in img]
     chip= [get_chip(image) for image in img]
     zpt = [get_zpt(i, ccdchip=c, zptype=zptype) for i,c in zip(img,chip)]
 
     if not image_number:
         image_number = [0 for image in img]
 
-    obstable = Table([img,exp,dat,fil,ins,det,zpt,chip,image_number],
+    obstable = Table([img,exp,dat,fil,ins,zpt,chip,image_number],
         names=['image','exptime','datetime','filter','instrument',
-         'detector','zeropoint','chip','imagenumber'])
+         'zeropoint','chip','imagenumber'])
     obstable.sort('datetime')
     obstable = add_visit_info(obstable)
     
