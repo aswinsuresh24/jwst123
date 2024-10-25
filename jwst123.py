@@ -176,7 +176,8 @@ def generate_dolphot_paramfile(basedir):
         raise ValueError('More than one i2d image found')
     
     ref_image = ref_image[0]
-    phot_images = glob.glob(basedir + '/*cal.fits')
+    # phot_images = glob.glob(basedir + '/*cal.fits')
+    phot_images = glob.glob(basedir + '/*jhat.fits')
     phot_image_base = [os.path.basename(r).replace('.fits', '') for r in phot_images]
     phot_image_det = ['long' if 'long' in get_detector_chip(r) else 'short' for r in phot_images]
     N_img = len(phot_images)
@@ -324,15 +325,40 @@ def align_to_gaia(align_image, outdir, verbose = False):
     os.rename(temp_cal_name, jhat_image)
 
 if __name__ == '__main__':
-    parser = create_parser()
-    args = parser.parse_args()
-    work_dir = args.workdir
-    align_method = args.align_method
+    # parser = create_parser()
+    # args = parser.parse_args()
+    # work_dir = args.workdir
+    # align_method = args.align_method
 
-    input_images = get_input_images(workdir=work_dir)
-    table = input_list(input_images)
-    tables = organize_reduction_tables(table, byvisit=True)
+    # input_images = get_input_images(workdir=work_dir)
+    # table = input_list(input_images)
+    # tables = organize_reduction_tables(table, byvisit=True)
 
-    table = tables[0]
-    align_images = np.array([r['image'] for r in table])
-    align_to_gaia(align_images[0], os.path.join(work_dir, 'jhat'), verbose = True)
+    # table = tables[0]
+    # align_images = np.array([r['image'] for r in table])
+    # align_to_gaia(align_images[0], os.path.join(work_dir, 'jhat'), verbose = True)
+
+    outdir = 'jwstred_temp_dolphot/m92/nircam'
+    outdir_raw = os.path.join(outdir, 'raw')
+    if not os.path.exists(outdir_raw):
+        os.makedirs(outdir_raw)
+
+    for fl in glob.glob('jwstred_temp_dolphot/jhat/*jhat.fits'):
+        shutil.copy(fl, outdir)
+        shutil.copy(fl, outdir_raw)
+
+    for fl in glob.glob('jwstred_temp_dolphot/out/*i2d.fits'):
+        shutil.copy(fl, outdir)
+        shutil.copy(fl, outdir_raw)
+
+    # run nircammask (generalize paths later)
+
+    basedir = 'jwstred_temp_dolphot/m92/nircam'
+    generate_dolphot_paramfile(basedir)
+    #switch directory to basedir
+    os.chdir(basedir)
+    #run dolphot
+    dolphot_images = glob.glob('*fits')
+    apply_nircammask(dolphot_images)
+    calc_cky(dolphot_images)
+    subprocess.run('dolphot m92.phot -pdolphot.param', shell=True)

@@ -13,4 +13,5 @@ launch.sh
 *.log
 *.txt
 *.csv
+*.png
 pipeline.ipynb
