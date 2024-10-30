@@ -56,6 +56,15 @@ def get_filter(image):
             f = str(fits.getval(image, 'FILTER2'))
     return(f.lower())
 
+def get_module(image):
+    #check jwst header keywords for module
+    try:
+        f = str(fits.getval(image, 'MODULE'))
+    except:
+        f = str(fits.getval(image, 'DETECTOR'))
+        f = f.split('NRC')[1][0]
+    return(f.lower())
+
 def get_instrument(image):
     hdu = fits.open(image, mode='readonly')
     inst = hdu[0].header['INSTRUME'].lower()
@@ -146,6 +155,7 @@ def add_visit_info(obstable):
         mjd = Time(row['datetime']).mjd
         filt = row['filter']
         filename = row['image']
+        module = row['module']
 
         # If this is the first one we're making, assign it to visit 1
         if all([obs['visit'] == 0 for obs in obstable]):
@@ -305,14 +315,15 @@ def input_list(input_images):
     fil = [get_filter(image) for image in img]
     ins = [get_instrument(image) for image in img]
     # det = ['_'.join(get_instrument(image).split('_')[:2]) for image in img]
+    module = [get_module(image) for image in img]
     chip= [get_chip(image) for image in img]
     zpt = [get_zpt(i, ccdchip=c, zptype=zptype) for i,c in zip(img,chip)]
 
     if not image_number:
         image_number = [0 for image in img]
 
-    obstable = Table([img,exp,dat,fil,ins,zpt,chip,image_number],
-        names=['image','exptime','datetime','filter','instrument',
+    obstable = Table([img,exp,dat,fil,ins,module,zpt,chip,image_number],
+        names=['image','exptime','datetime','filter','instrument', 'module',
          'zeropoint','chip','imagenumber'])
     obstable.sort('datetime')
     obstable = add_visit_info(obstable)
@@ -323,6 +334,7 @@ def input_list(input_images):
         n = str(visit).zfill(4)
         inst = row['instrument']
         filt = row['filter']
+        module = row['module']
 
         # Visit should correspond to first image so they're all the same
         visittable = obstable[obstable['visit']==visit]
@@ -337,7 +349,7 @@ def input_list(input_images):
         drizname = ''
         objname = None
         if objname:
-            drizname = '{obj}.{inst}.{filt}.ut{date}_{n}.drz.fits'
+            drizname = '{obj}.{inst}.{module}.{filt}.ut{date}_{n}.drz.fits'
             drizname = drizname.format(inst=inst.split('_')[0],
                 filt=filt, n=n, date=date_str, obj=objname)
         else:
