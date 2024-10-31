@@ -28,6 +28,9 @@ from astroscrappy import detect_cosmics
 from stwcs import updatewcs
 from scipy.interpolate import interp1d
 from jwst.pipeline import calwebb_image3
+from jwst.associations import asn_from_list
+from jwst.associations.lib.rules_level3_base import DMS_Level3_Base
+from jwst.pipeline import calwebb_image3
 import jhat
 from jhat import jwst_photclass,st_wcs_align
 import subprocess
@@ -110,6 +113,81 @@ def get_detector_chip(filename):
         return fl_split[idx]
     
     return None
+
+def pick_deepest_image(table):
+    '''
+    Pick the deepest image from a table
+
+    Parameters
+    ----------
+    table : astropy.table.Table
+        Table of images
+
+    Returns
+    -------
+    deepest_image : astropy.table.Row
+        Deepest image
+    '''
+    exptimes = [r['exptime'] for r in table]
+    deepest_image = table[exptimes.index(max(exptimes))]
+    return deepest_image
+
+def generate_level3_mosaic(inputfiles, outdir):
+    table = input_list(inputfiles)
+    # tables = organize_reduction_tables(table, byvisit=False)
+    filter_name = table[0]['filter']
+    nircam_asn_file = f'{outdir}/{filter_name}.json'
+    base_filenames = np.array([os.path.join('jhat', os.path.basename(r['image'])) for r in table])
+    asn3 = asn_from_list.asn_from_list(base_filenames, 
+        rule=DMS_Level3_Base, product_name=filter_name)
+    
+    with open(nircam_asn_file, 'w') as outfile:
+        name, serialized = asn3.dump(format='json')
+        outfile.write(serialized)
+
+    image3 = calwebb_image3.Image3Pipeline()
+
+    outdir_level3 = os.path.join(outdir, 'out')
+    if not os.path.exists(outdir_level3):
+        os.makedirs(outdir_level3)
+
+    image3.output_dir = outdir_level3
+    image3.save_results = True
+    image3.tweakreg.skip = True
+    image3.skymatch.skip = True
+    image3.skymatch.match_down = False
+    image3.source_catalog.skip=False
+
+    image3.run(nircam_asn_file)
+
+def create_alignment_mosaic(filter_table, outdir):
+    #best filters for Gaia alignment, in order
+    good_filters = ['f277w', 'f322w2', 'f356w', 'f250m', 'f300m']
+
+    #pick the best filter present in filter_table.keys(), that appears first in good_filters
+    align_table = None
+    for filt in good_filters:
+        if filt in filter_table:
+            align_table = filter_table[filt]
+            break
+    
+    if align_table is None:
+        raise ValueError('No compatible alignment filter found')
+    
+    ref_image = pick_deepest_image(align_table)
+    ref_image = ref_image['image']
+    refcat, photfilename = jwst_phot(ref_image)
+
+    for row in align_table:
+        image = row['image']
+        if image == ref_image:
+            continue
+        dispersion = align_to_jwst(image, photfilename, outdir=outdir, verbose=True)
+        print(f'Dispersion for {image}: {dispersion}"')
+    # return align_table
+
+    inputfiles = glob.glob(f'{outdir}/*jhat*.fits')
+    generate_level3_mosaic(inputfiles, outdir)
 
 def apply_nircammask(files):
     '''
@@ -275,10 +353,8 @@ def jwst_phot(phot_img):
     jwst_phot.run_phot(imagename=phot_img,
                         photfilename=photfilename,
                         overwrite=True,
-                        ee_radius=70,
-        #                    use_dq=True,
-                        SNR_min = 10,
-                        find_stars_threshold = 5)
+                        ee_radius=70)
+                        # use_dq=True
     refcat = Table.read(photfilename,format='ascii')
     return refcat, photfilename
 
@@ -324,41 +400,95 @@ def align_to_gaia(align_image, outdir, verbose = False):
     print(f'Final dispersion: {dispersion_final}"')
     os.rename(temp_cal_name, jhat_image)
 
-if __name__ == '__main__':
-    # parser = create_parser()
-    # args = parser.parse_args()
-    # work_dir = args.workdir
-    # align_method = args.align_method
+    return dispersion_final
 
-    # input_images = get_input_images(workdir=work_dir)
-    # table = input_list(input_images)
-    # tables = organize_reduction_tables(table, byvisit=True)
+def align_to_jwst(align_image, photfilename, outdir, verbose = False):
+    # jwst_phot = jwst_photclass()
+    # jwst_phot.run_phot(imagename=ref_image,photfilename='auto',overwrite=True,ee_radius=80,use_dq=True)
+    # ref_catname = ref_image.replace('.fits','.phot.txt') # the default
+    # refcat = Table.read(ref_catname,format='ascii')
+
+    wcs_align = st_wcs_align()
+    print(f'Aligning {os.path.basename(align_image)} to JWST')
+    wcs_align.run_all(align_image,
+                      telescope='jwst',
+                      outsubdir=outdir,
+                      refcat_racol='ra',
+                      refcat_deccol='dec',
+                      refcat_magcol='mag',
+                      refcat_magerrcol='dmag',
+                      overwrite=True,
+                      d2d_max=1.0,
+                      showplots=2,
+                      find_stars_threshold=5,
+                      refcatname=photfilename,
+                      iterate_with_xyshifts = True,
+                      histocut_order='dxdy',
+                      sharpness_lim=(0.3,0.95),
+                      roundness1_lim=(-0.7, 0.7),
+                      xshift = 0,
+                      yshift = 0,
+                      SNR_min= 5,
+                      dmag_max=0.1,
+                      Nbright=800,
+                      objmag_lim =(15,22),
+                      slope_min = -20/2048,
+                      binsize_px = 1.0)
+    
+    jhat_image = os.path.join(outdir, os.path.basename(align_image.replace('cal.fits', 'jhat.fits')))
+    #compute dispersion
+    # gaia_table = query_gaia(align_image, save_file = None)
+    dispersion_initial = calc_dispersion(refcat, jhat_image.replace('_jhat.fits', '.phot.txt'), dist_limit = 1, plot = True)
+    print(f'Initial dispersion: {dispersion_initial}"')
+    temp_cal_name = jhat_image.replace('jhat.fits', 'jhat_cal.fits')
+    os.rename(jhat_image, temp_cal_name)
+    refcat, photfilename = jwst_phot(jhat_image.replace('jhat.fits', 'jhat_cal.fits'))
+    dispersion_final = calc_dispersion(refcat, photfilename, dist_limit = 1, plot = True)
+    print(f'Final dispersion: {dispersion_final}"')
+    os.rename(temp_cal_name, jhat_image)
+
+    return dispersion_final
+
+if __name__ == '__main__':
+    parser = create_parser()
+    args = parser.parse_args()
+    work_dir = args.workdir
+    align_method = args.align_method
+
+    input_images = get_input_images(workdir=work_dir)
+    table = input_list(input_images)
+    tables = organize_reduction_tables(table, byvisit=True, bymodule=True)
+    for tbl in tables:
+        print(tbl)
+        filters = [r['filter'][0] for r in tbl]
+        filter_table = dict(zip(filters, tbl))
+        create_alignment_mosaic(filter_table)
 
     # table = tables[0]
     # align_images = np.array([r['image'] for r in table])
     # align_to_gaia(align_images[0], os.path.join(work_dir, 'jhat'), verbose = True)
 
-    outdir = 'jwstred_temp_dolphot/m92/nircam'
-    outdir_raw = os.path.join(outdir, 'raw')
-    if not os.path.exists(outdir_raw):
-        os.makedirs(outdir_raw)
+    # outdir = 'jwstred_temp_dolphot/m92/nircam'
+    # outdir_raw = os.path.join(outdir, 'raw')
+    # if not os.path.exists(outdir_raw):
+    #     os.makedirs(outdir_raw)
 
-    for fl in glob.glob('jwstred_temp_dolphot/jhat/*jhat.fits'):
-        shutil.copy(fl, outdir)
-        shutil.copy(fl, outdir_raw)
+    # for fl in glob.glob('jwstred_temp_dolphot/jhat/*jhat.fits'):
+    #     shutil.copy(fl, outdir)
+    #     shutil.copy(fl, outdir_raw)
 
-    for fl in glob.glob('jwstred_temp_dolphot/out/*i2d.fits'):
-        shutil.copy(fl, outdir)
-        shutil.copy(fl, outdir_raw)
+    # for fl in glob.glob('jwstred_temp_dolphot/out/*i2d.fits'):
+    #     shutil.copy(fl, outdir)
+    #     shutil.copy(fl, outdir_raw)
 
-    # run nircammask (generalize paths later)
+    # # run nircammask (generalize paths later)
 
-    basedir = 'jwstred_temp_dolphot/m92/nircam'
-    generate_dolphot_paramfile(basedir)
-    #switch directory to basedir
-    os.chdir(basedir)
-    #run dolphot
-    dolphot_images = glob.glob('*fits')
-    apply_nircammask(dolphot_images)
-    calc_cky(dolphot_images)
-    subprocess.run('dolphot m92.phot -pdolphot.param', shell=True)
+    # basedir = 'jwstred_temp_dolphot/m92/nircam'
+    # generate_dolphot_paramfile(basedir)
+    # #switch directory to basedir
+    # os.chdir(basedir)
+    # #run dolphot
+    # dolphot_images = glob.glob('*fits')
+    # apply_nircammask(dolphot_images)
+    # calc_cky(dolphot_images)
+    # subprocess.run('dolphot m92.phot -pdolphot.param', shell=True)
