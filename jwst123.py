@@ -132,12 +132,23 @@ def pick_deepest_image(table):
     deepest_image = table[exptimes.index(max(exptimes))]
     return deepest_image
 
+def jwst_phot(phot_img):
+    jwst_phot = jwst_photclass()
+    photfilename = phot_img.replace('.fits','.phot.txt')
+    jwst_phot.run_phot(imagename=phot_img,
+                        photfilename=photfilename,
+                        overwrite=True,
+                        ee_radius=70)
+                        # use_dq=True
+    refcat = Table.read(photfilename,format='ascii')
+    return refcat, photfilename
+
 def generate_level3_mosaic(inputfiles, outdir):
     table = input_list(inputfiles)
     # tables = organize_reduction_tables(table, byvisit=False)
     filter_name = table[0]['filter']
     nircam_asn_file = f'{outdir}/{filter_name}.json'
-    base_filenames = np.array([os.path.join('jhat', os.path.basename(r['image'])) for r in table])
+    base_filenames = np.array([os.path.basename(r['image']) for r in table])
     asn3 = asn_from_list.asn_from_list(base_filenames, 
         rule=DMS_Level3_Base, product_name=filter_name)
     
@@ -159,6 +170,8 @@ def generate_level3_mosaic(inputfiles, outdir):
     image3.source_catalog.skip=False
 
     image3.run(nircam_asn_file)
+    mosaic_name = f'{outdir_level3}/{filter_name}_i2d.fits'
+    return mosaic_name
 
 def create_alignment_mosaic(filter_table, outdir):
     #best filters for Gaia alignment, in order
@@ -187,7 +200,9 @@ def create_alignment_mosaic(filter_table, outdir):
     # return align_table
 
     inputfiles = glob.glob(f'{outdir}/*jhat*.fits')
-    generate_level3_mosaic(inputfiles, outdir)
+    mosaic_name = generate_level3_mosaic(inputfiles, outdir)
+    dispersion = align_to_gaia(mosaic_name, outdir, xshift = -30, yshift = 6, verbose=True)
+    print(f'Dispersion for {mosaic_name}: {dispersion}"')
 
 def apply_nircammask(files):
     '''
@@ -323,11 +338,18 @@ def query_gaia(image, dr = 'gaiadr3', save_file = False):
     
     return tb_gaia
 
-def calc_dispersion(gaia_table, phot_file, dist_limit = 1, plot = False):
-    jhat_df = pd.read_csv(glob.glob(phot_file)[0], sep = '\s+') #read phot file with uneven spacing
+def calc_dispersion(gaia_table, phot_file, phot_image = False, dist_limit = 1, plot = False, inspect_large_offset = False):
+    jhat_df = pd.read_csv(phot_file, sep = '\s+')    
     
-    jh_ra, jh_dec = jhat_df['ra'].to_numpy()*u.degree, jhat_df['dec'].to_numpy()*u.degree
-    jh_skycoord = SkyCoord(ra = jh_ra, dec = jh_dec)
+    if phot_image:
+        hdr = fits.open(phot_image)['SCI'].header
+        w = wcs.WCS(hdr)
+        jh_radec = w.all_pix2world(jhat_df['x'], jhat_df['y'], 0)
+        jh_ra, jh_dec = np.array(jh_radec[0])*u.degree, np.array(jh_radec[1])*u.degree
+        jh_skycoord = SkyCoord(ra = jh_ra, dec = jh_dec)
+    else:    
+        jh_ra, jh_dec = jhat_df['ra'].to_numpy()*u.degree, jhat_df['dec'].to_numpy()*u.degree
+        jh_skycoord = SkyCoord(ra = jh_ra, dec = jh_dec)
     ga_ra, ga_dec = np.array(gaia_table['ra'])*u.degree, np.array(gaia_table['dec'])*u.degree
     ga_skycoord = SkyCoord(ra = ga_ra, dec = ga_dec)
     
@@ -347,18 +369,7 @@ def calc_dispersion(gaia_table, phot_file, dist_limit = 1, plot = False):
         
     return dispersion
 
-def jwst_phot(phot_img):
-    jwst_phot = jwst_photclass()
-    photfilename = phot_img.replace('.fits','.phot.txt')
-    jwst_phot.run_phot(imagename=phot_img,
-                        photfilename=photfilename,
-                        overwrite=True,
-                        ee_radius=70)
-                        # use_dq=True
-    refcat = Table.read(photfilename,format='ascii')
-    return refcat, photfilename
-
-def align_to_gaia(align_image, outdir, verbose = False):
+def align_to_gaia(align_image, outdir, xshift = 0, yshift = 0, verbose = False):
     wcs_align = st_wcs_align()
     print(f'Aligning {os.path.basename(align_image)} to Gaia')
     wcs_align.run_all(align_image,
@@ -374,8 +385,8 @@ def align_to_gaia(align_image, outdir, verbose = False):
           use_dq = False,
           verbose = verbose,
           iterate_with_xyshifts = True,
-          xshift = -60,
-          yshift = 10,
+          xshift = xshift,
+          yshift = yshift,
           sharpness_lim=(0.3,0.95),
           roundness1_lim=(-0.7, 0.7),
         #   Nbright = 1000,
@@ -388,15 +399,24 @@ def align_to_gaia(align_image, outdir, verbose = False):
           slope_min = -20/2048,
           savephottable = 0)
     
-    jhat_image = os.path.join(outdir, os.path.basename(align_image.replace('cal.fits', 'jhat.fits')))
+    if 'cal.fits' in align_image:
+        jhat_image = os.path.join(outdir, os.path.basename(align_image.replace('cal.fits', 'jhat.fits')))
+        temp_cal_name = jhat_image.replace('jhat.fits', 'jhat_cal.fits')
+        phot_image = False
+    elif 'i2d.fits' in align_image:
+        jhat_image = os.path.join(outdir, os.path.basename(align_image.replace('i2d.fits', 'jhat.fits')))
+        temp_cal_name = jhat_image.replace('jhat.fits', 'jhat_i2d.fits')
+        phot_image = temp_cal_name
+    else:
+        raise ValueError('Invalid image type')
     #compute dispersion
     gaia_table = query_gaia(align_image, save_file = None)
     dispersion_initial = calc_dispersion(gaia_table, jhat_image.replace('_jhat.fits', '.phot.txt'), dist_limit = 1, plot = True)
     print(f'Initial dispersion: {dispersion_initial}"')
-    temp_cal_name = jhat_image.replace('jhat.fits', 'jhat_cal.fits')
+    # temp_cal_name = jhat_image.replace('jhat.fits', 'jhat_cal.fits')
     os.rename(jhat_image, temp_cal_name)
-    refcat, photfilename = jwst_phot(jhat_image.replace('jhat.fits', 'jhat_cal.fits'))
-    dispersion_final = calc_dispersion(gaia_table, photfilename, dist_limit = 1, plot = True)
+    refcat, photfilename = jwst_phot(temp_cal_name)
+    dispersion_final = calc_dispersion(gaia_table, photfilename, phot_image = phot_image, dist_limit = 1, plot = True)
     print(f'Final dispersion: {dispersion_final}"')
     os.rename(temp_cal_name, jhat_image)
 
@@ -438,6 +458,7 @@ def align_to_jwst(align_image, photfilename, outdir, verbose = False):
     jhat_image = os.path.join(outdir, os.path.basename(align_image.replace('cal.fits', 'jhat.fits')))
     #compute dispersion
     # gaia_table = query_gaia(align_image, save_file = None)
+    refcat = Table.read(photfilename, format='ascii')
     dispersion_initial = calc_dispersion(refcat, jhat_image.replace('_jhat.fits', '.phot.txt'), dist_limit = 1, plot = True)
     print(f'Initial dispersion: {dispersion_initial}"')
     temp_cal_name = jhat_image.replace('jhat.fits', 'jhat_cal.fits')
@@ -459,7 +480,6 @@ if __name__ == '__main__':
     table = input_list(input_images)
     tables = organize_reduction_tables(table, byvisit=True, bymodule=True)
     for tbl in tables:
-        print(tbl)
         filters = [r['filter'][0] for r in tbl]
         filter_table = dict(zip(filters, tbl))
         create_alignment_mosaic(filter_table)
