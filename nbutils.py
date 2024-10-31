@@ -184,7 +184,7 @@ def add_visit_info(obstable):
 
     return(obstable)
 
-def organize_reduction_tables(obstable, byvisit=False):
+def organize_visit_tables(obstable, byvisit=False):
 
     tables = []
     if byvisit:
@@ -196,6 +196,17 @@ def organize_reduction_tables(obstable, byvisit=False):
 
     return(tables)
 
+def organize_reduction_tables(obstable, byvisit=False, bymodule=False):
+
+    tables = []
+    if bymodule:
+        for mod in list(set(obstable['module'].data)):
+            mask = obstable['module'] == mod
+            tables.append(organize_visit_tables(obstable[mask], byvisit=byvisit))
+    else:
+        tables.append(organize_visit_tables(obstable, byvisit=byvisit))
+
+    return(tables)
 
 def pick_deepest_images(images, reffilter=None, avoid_wfpc2=False, refinst=None):
     # Best possible filter for a dolphot reference image in the approximate
@@ -351,11 +362,11 @@ def input_list(input_images):
         if objname:
             drizname = '{obj}.{inst}.{module}.{filt}.ut{date}_{n}.drz.fits'
             drizname = drizname.format(inst=inst.split('_')[0],
-                filt=filt, n=n, date=date_str, obj=objname)
+                filt=filt, n=n, date=date_str, obj=objname, module=module)
         else:
-            drizname = '{inst}.{filt}.ut{date}_{n}.drz.fits'
+            drizname = '{inst}.{module}.{filt}.ut{date}_{n}.drz.fits'
             drizname = drizname.format(inst=inst.split('_')[0],
-                filt=filt, n=n, date=date_str)
+                filt=filt, n=n, date=date_str, module=module)
 
         if '.':
             drizname = os.path.join('.', drizname)
