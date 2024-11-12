@@ -62,6 +62,7 @@ def create_parser():
     parser = argparse.ArgumentParser(description='Download JWST data')
     parser.add_argument('--ra', type=str, help='RA of the target', required=True)
     parser.add_argument('--dec', type=str, help='DEC of the target', required=True)
+    parser.add_argument('--obj', type=str, help='Name of the object', required=True)  
     parser.add_argument('--radius', type=float, default = 3.0, help='Radius in arcminutes')
     parser.add_argument('--stage', type=int, default = 2, help='Stage of the reduction')
     return parser
@@ -97,7 +98,8 @@ def query_mast_jwst(coord):
     mask = [all(l) for l in list(map(list, zip(*masks)))]
     obsTable_webb = obsTable[mask]
 
-    for obs in obsTable_webb[:1]:
+    for obs in obsTable_webb:
+        filt, obsid = obs['filters'], obs['obsid']
         productList = Observations.get_product_list(obs)
         #product list masks
         productmasks = []
@@ -112,13 +114,18 @@ def query_mast_jwst(coord):
 
         productmask = [all(l) for l in list(map(list, zip(*productmasks)))]
         productList = productList[productmask]
-        Observations.download_products(productList, extension='fits')
+        os.makedirs(f'mastDownload/{obj}/{filt}_{obsid}', exist_ok=True)
+        download_dir = f'mastDownload/{obj}/{filt}_{obsid}'
+        Observations.download_products(productList, download_dir=download_dir, extension='fits')
 
 if __name__ == '__main__':
     parser = create_parser()
     args = parser.parse_args()
     ra, dec, radius = args.ra, args.dec, args.radius*u.arcmin
+    obj = args.obj
     stage = args.stage
+
+    os.makedirs(f'mastDownload/{obj}', exist_ok=True)
 
     coord = SkyCoord(ra, dec, frame = 'icrs', unit = 'deg')
     query_mast_jwst(coord)
