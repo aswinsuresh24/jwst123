@@ -82,6 +82,7 @@ def create_parser():
     '''
     parser = argparse.ArgumentParser(description='Reduce JWST data')
     parser.add_argument('--workdir', type=str, default='.', help='Root directory to search for data')
+    parser.add_argument('--object', type=str, default='m92', help='Object to reduce')
     return parser
 
 def get_input_images(pattern=None, workdir=None):
@@ -184,6 +185,21 @@ def add_alignment_groups(table):
     return table
 
 def jwst_phot(phot_img):
+    '''
+    Run photometry using jhat jwst_photclass
+
+    Parameters
+    ----------
+    phot_img : str
+        Photometry image
+
+    Returns
+    -------
+    refcat : astropy.table.Table
+        Reference catalog
+    photfilename : str
+        Photometry file name
+    '''
     jwst_phot = jwst_photclass()
     photfilename = phot_img.replace('.fits','.phot.txt')
     jwst_phot.run_phot(imagename=phot_img,
@@ -195,21 +211,41 @@ def jwst_phot(phot_img):
     return refcat, photfilename
 
 def generate_level3_mosaic(inputfiles, outdir):
+    '''
+    Create level3 drizzled mosaic from level2 input files
+    using the JWST pipeline
+
+    Parameters
+    ----------
+    input_files : list
+        List of input level2 files
+    outdir: str
+        Output directory
+
+    Returns
+    -------
+    mosaic_name : str
+        Level3 mosaic file name
+    '''
     if not os.path.exists(outdir):
         os.makedirs(outdir)
+
     #move input files to outdir
     if 'reference' in outdir:
         for fl in inputfiles:
             shutil.move(fl, outdir)
         inputfiles = glob.glob(f'{outdir}/*nrc*jhat.fits')
+
     table = input_list(inputfiles)
     # tables = organize_reduction_tables(table, byvisit=False)
-    filter_name = table[0]['filter']
-    module_name = table[0]['module']
+    # filter_name = table[0]['filter']
+    # module_name = table[0]['module']
+    filters = np.unique([r['filter'] for r in table])
+    filter_name = '_'.join(filters)
     nircam_asn_file = f'{outdir}/{filter_name}.json'
     base_filenames = np.array([os.path.basename(r['image']) for r in table])
     asn3 = asn_from_list.asn_from_list(base_filenames, 
-        rule=DMS_Level3_Base, product_name=f'{filter_name}_{module_name}')
+        rule=DMS_Level3_Base, product_name=f'{filter_name}')
     
     with open(nircam_asn_file, 'w') as outfile:
         name, serialized = asn3.dump(format='json')
@@ -227,12 +263,15 @@ def generate_level3_mosaic(inputfiles, outdir):
     image3.skymatch.skip = True
     image3.skymatch.match_down = False
     image3.source_catalog.skip=False
+    image3.resample.pixfrac = 1.0
+    # image3.pixel_scale = 0.0311
+    image3.weight_type = 'ivm'
 
     image3.run(nircam_asn_file)
-    mosaic_name = f'{outdir_level3}/{filter_name}_{module_name}_i2d.fits'
+    mosaic_name = f'{outdir_level3}/{filter_name}_i2d.fits'
     return mosaic_name
 
-def create_alignment_mosaic(filter_table, outdir):
+def create_alignment_mosaic(filter_table, outdir, work_dir):
     '''
     Create an alignement i2d mosiac from best available
     long wavelength filters
@@ -280,18 +319,23 @@ def create_alignment_mosaic(filter_table, outdir):
             image = row['image']
             if image == ref_image:
                 continue
-            dispersion = align_to_jwst(image, photfilename, outdir=outdir, verbose=True)
+            dispersion = align_to_jwst(image, photfilename, outdir=outdir, verbose=False)
             print(f'Dispersion for {image}: {dispersion}"')
     # return align_table
 
     #create i2d mosaic from relative aligned images
     inputfiles = glob.glob(f'{outdir}/*long*jhat*.fits') #this does not account for bymodule=True
     mosaic_name = generate_level3_mosaic(inputfiles, outdir)
+
     #align the mosaic to Gaia
-    dispersion = align_to_gaia(mosaic_name, outdir, xshift = -30, yshift = 6, verbose=True)
-    aligned_mosaic = os.path.join(outdir, os.path.basename(mosaic_name).replace('i2d.fits', 'jhat.fits'))
+    dispersion = align_to_gaia(mosaic_name, outdir, xshift = -30, yshift = 6, verbose=False)
+    jh_image = os.path.join(outdir, os.path.basename(mosaic_name).replace('i2d.fits', 'jhat.fits'))
+    shutil.move(jh_image, jh_image.replace('jhat.fits', 'jhat_i2d.fits'))
+    aligned_mosaic = jh_image.replace('jhat.fits', 'jhat_i2d.fits')
+    shutil.move(aligned_mosaic, work_dir)
     print(f'Dispersion for {aligned_mosaic}: {dispersion}"')
-    return aligned_mosaic
+
+    return os.path.join(work_dir, os.path.basename(aligned_mosaic))
 
 def apply_nircammask(files):
     '''
@@ -379,8 +423,22 @@ def generate_dolphot_paramfile(basedir):
         for key, val in base_params.items():
             f.write('{} = {}\n'.format(key, val))
 
-#ALIGNMENT BLOCK
 def cut_gaia_sources(image, table_gaia):
+    ''''
+    Remove Gaia sources that are outside the image
+
+    Parameters
+    ----------
+    image : str
+        Image file name
+    table_gaia : astropy.table.Table
+        Gaia table
+
+    Returns
+    -------
+    table_gaia : astropy.table.Table
+        Table with sources inside the image
+    '''
     im = fits.open(image)
     hdr = im['SCI'].header
     w = wcs.WCS(hdr)
@@ -393,6 +451,23 @@ def cut_gaia_sources(image, table_gaia):
     return table_gaia[mask]
 
 def query_gaia(image, dr = 'gaiadr3', save_file = False):
+    '''
+    Query Gaia for sources in the image
+
+    Parameters
+    ----------
+    image : str
+        Image file name
+    dr : str
+        Gaia data release
+    save_file : str
+        File name to save the Gaia query to
+
+    Returns
+    -------
+    tb_gaia : astropy.table.Table
+        Gaia table
+    '''
     im = fits.open(image)
 
     hdr = im['SCI'].header
@@ -427,7 +502,30 @@ def query_gaia(image, dr = 'gaiadr3', save_file = False):
     
     return tb_gaia
 
-def calc_dispersion(gaia_table, phot_file, phot_image = False, dist_limit = 1, plot = False, inspect_large_offset = False):
+def calc_dispersion(gaia_table, phot_file,
+                     phot_image = False, dist_limit = 1, 
+                     plot = False):
+    '''
+    Calculate disperson between Gaia and JWST sources
+
+    Parameters
+    ----------
+    gaia_table : astropy.table.Table
+        Gaia table
+    phot_file : str
+        Photometry file
+    phot_image : str
+        Photometry image
+    dist_limit : float
+        Distance limit for xmatch
+    plot : bool
+        Plot the histogram of distances
+
+    Returns
+    -------
+    dispersion : float
+        Dispersion between Gaia and JWST sources
+    '''
     jhat_df = pd.read_csv(phot_file, sep = '\s+')    
 
     if phot_image:
@@ -459,6 +557,25 @@ def calc_dispersion(gaia_table, phot_file, phot_image = False, dist_limit = 1, p
     return dispersion
 
 def align_to_gaia(align_image, outdir, xshift = 0, yshift = 0, verbose = False):
+    '''
+    Align JWST image to the Gaia frame
+
+    Parameters
+    ----------
+    align_image : str
+        Image to align
+    outdir : str
+        Output directory
+    xshift, yshift : float
+        x and y shift
+    verbose : bool
+        Verbose output
+
+    Returns
+    -------
+    dispersion_final : float
+        Dispersion value
+    '''
     wcs_align = st_wcs_align()
     print(f'Aligning {os.path.basename(align_image)} to Gaia')
     wcs_align.run_all(align_image,
@@ -512,6 +629,29 @@ def align_to_gaia(align_image, outdir, xshift = 0, yshift = 0, verbose = False):
     return dispersion_final
 
 def align_to_jwst(align_image, photfilename, outdir, xshift = 0, yshift = 0, Nbright = 800, verbose = False):
+    '''
+    Align JWST image to another JWST image
+
+    Parameters
+    ----------
+    align_image : str
+        Image to align
+    photfilename : str
+        Photometry file name
+    outdir : str
+        Output directory
+    xshift, yshift : float
+        x and y shift
+    Nbright : int
+        Number of bright stars to use
+    verbose : bool
+        Verbose output
+
+    Returns
+    -------
+    dispersion_final : float
+        Dispersion value
+    '''
     wcs_align = st_wcs_align()
     print(f'Aligning {os.path.basename(align_image)} to JWST')
     wcs_align.run_all(align_image,
@@ -538,7 +678,8 @@ def align_to_jwst(align_image, photfilename, outdir, xshift = 0, yshift = 0, Nbr
                       Nbright=Nbright,
                       objmag_lim =(15,22),
                       slope_min = -20/2048,
-                      binsize_px = 1.0)
+                      binsize_px = 1.0,
+                      savephottable=0)
     
     jhat_image = os.path.join(outdir, os.path.basename(align_image.replace('cal.fits', 'jhat.fits')))
     #compute dispersion
@@ -556,75 +697,115 @@ def align_to_jwst(align_image, photfilename, outdir, xshift = 0, yshift = 0, Nbr
     return dispersion_final
 
 def fix_phot(mosaic):
-    temp_mosaic_name = mosaic.replace('jhat.fits', 'i2d.fits')
-    os.rename(mosaic, temp_mosaic_name)
-    refcat, photfile = jwst_phot(temp_mosaic_name)
-    w = wcs.WCS(fits.open(temp_mosaic_name)['SCI'].header)
+    '''
+    Fix jhat photometry for i2d files
+
+    Parameters
+    ----------
+    mosaic : str
+        Mosaic file name
+
+    Returns
+    -------
+    photfile : str  
+        Fixed photometry file name
+    '''
+    # temp_mosaic_name = mosaic.replace('jhat.fits', 'i2d.fits')
+    # os.rename(mosaic, temp_mosaic_name)
+    refcat, photfile = jwst_phot(mosaic)
+    w = wcs.WCS(fits.open(mosaic)['SCI'].header)
     jh_radec = w.all_pix2world(refcat['x'], refcat['y'], 0)
     jh_ra, jh_dec = np.array(jh_radec[0]), np.array(jh_radec[1])
     refcat['ra'], refcat['dec'] = jh_ra, jh_dec
     #photfile.replace('i2d', 'i2d_new')
     refcat.write(photfile.replace('i2d', 'i2d.corr'), format = 'ascii', overwrite = True)
-    os.rename(temp_mosaic_name, mosaic)
+    # os.rename(temp_mosaic_name, mosaic)
     return photfile.replace('i2d', 'i2d.corr')
 
 def align_to_mosaic(mosaic_photfile, cal_images, outdir, gaia_offset = (0, 0), verbose = False):
+    '''
+    Align JWST images to the alignment mosaic
+
+    Parameters
+    ----------
+    mosaic_photfile : str
+        Mosaic photometry file
+    cal_images : list
+        List of images to align
+    outdir : str
+        Output directory
+
+    Returns
+    -------
+    None
+    '''
     xshift, yshift = gaia_offset
     for im in cal_images:
         _ = align_to_jwst(im, mosaic_photfile, outdir, xshift = xshift, 
                           yshift = yshift, Nbright = None, verbose = verbose)
 
+def create_dirs(work_dir, obj):
+    '''
+    Create directories for dolphot
+
+    Parameters
+    ----------
+    work_dir : str
+        Work directory
+    obj : str
+        Object name
+
+    Returns
+    -------
+    outdir : str
+        Output directory
+    '''
+    outdir = os.path.join(work_dir, obj, 'nircam')
+    if not os.path.exists(outdir):
+        os.makedirs(outdir)
+    return outdir
+
 if __name__ == '__main__':
     parser = create_parser()
     args = parser.parse_args()
     work_dir = args.workdir
+    obj = args.object
+
+    dolphot_basedir = create_dirs(work_dir, obj)
 
     input_images = get_input_images(workdir=work_dir)
     table = input_list(input_images)
-    tables = organize_reduction_tables(table, byvisit=True, bymodule=True)
-    for tbl in tables[:1]:
+    tables = organize_reduction_tables(table, byvisit=True, bymodule=False)
+    for tbl in tables:
         filters = [r['filter'][0] for r in tbl]
         filter_table = dict(zip(filters, tbl))
-        mosaic_name = create_alignment_mosaic(filter_table, work_dir)
+        mosaic_name = create_alignment_mosaic(filter_table, os.path.join(work_dir, 'align'), work_dir)
         mosaic_photfile = fix_phot(mosaic_name)
         print(f'Mosaic photfile: {mosaic_photfile}')
         for filt, tbl in filter_table.items():
-            module = tbl[0]['module']
             if filt == 'f277w':
-                continue
+                gaia_offset = (-30, 6)
+            else:
+                gaia_offset = (-61, 12)
             align_to_mosaic(mosaic_photfile, [r['image'] for r in tbl], os.path.join(work_dir, 'jhat'), 
-                            gaia_offset = (-61, 12), verbose = True)
-            aligned_images = glob.glob(os.path.join(work_dir, 'jhat', f'*nrc{module}*jhat.fits'))
-            print(aligned_images)
-            if filt == 'f090w':
-                refname = generate_level3_mosaic(aligned_images, os.path.join(work_dir, 'reference'))
-                print(refname)
+                            gaia_offset = gaia_offset, verbose = False)
+        aligned_images = glob.glob(os.path.join(work_dir, 'jhat', f'*nrc*jhat.fits'))
+        refname = generate_level3_mosaic(aligned_images, os.path.join(work_dir, 'jhat'))
+        print('Dolphot reference image:', refname)
         
-        outdir = 'jwstred_temp_dolphot/m92/nircam'
-        outdir_raw = os.path.join(outdir, 'raw')
-        if not os.path.exists(outdir_raw):
-            os.makedirs(outdir_raw)
-
-        for fl in glob.glob(os.path.join(work_dir, 'reference', '*jhat.fits')):
-            shutil.copy(fl, outdir)
-            shutil.copy(fl, outdir_raw)
-
+        #copy files to dolphot directory
         for fl in glob.glob(os.path.join(work_dir, 'jhat', '*jhat.fits')):
-            shutil.copy(fl, outdir)
-            shutil.copy(fl, outdir_raw)
+            shutil.copy(fl, dolphot_basedir)
 
-        for fl in glob.glob(os.path.join(work_dir, 'reference', 'out', '*i2d.fits')):
-            shutil.copy(fl, outdir)
-            shutil.copy(fl, outdir_raw)
+        for fl in glob.glob(os.path.join(work_dir, 'jhat', 'out', '*i2d.fits')):
+            shutil.copy(fl, dolphot_basedir)
 
-        # run nircammask (generalize paths later)
-
-        basedir = 'jwstred_temp_dolphot/m92/nircam'
-        generate_dolphot_paramfile(basedir)
+        #generate dolphot param file
+        generate_dolphot_paramfile(dolphot_basedir)
         #switch directory to basedir
-        os.chdir(basedir)
+        os.chdir(dolphot_basedir)
         #run dolphot
         dolphot_images = glob.glob('*fits')
         apply_nircammask(dolphot_images)
         calc_cky(dolphot_images)
-        subprocess.run('dolphot m92.phot -pdolphot.param', shell=True)
+        subprocess.run(f'dolphot {obj}.phot -pdolphot.param', shell=True)
