@@ -100,6 +100,7 @@ def query_mast_jwst(coord):
 
     for obs in obsTable_webb:
         filt, obsid = obs['filters'], obs['obsid']
+        filt = filt.replace(';', '_')
         productList = Observations.get_product_list(obs)
         #product list masks
         productmasks = []
@@ -114,8 +115,8 @@ def query_mast_jwst(coord):
 
         productmask = [all(l) for l in list(map(list, zip(*productmasks)))]
         productList = productList[productmask]
-        os.makedirs(f'mastDownload/{obj}/{filt}_{obsid}', exist_ok=True)
-        download_dir = f'mastDownload/{obj}/{filt}_{obsid}'
+        os.makedirs(f'jwst_data/{obj}/{filt}_{obsid}', exist_ok=True)
+        download_dir = f'jwst_data/{obj}/{filt}_{obsid}'
         Observations.download_products(productList, download_dir=download_dir, extension='fits')
 
 if __name__ == '__main__':
@@ -125,7 +126,7 @@ if __name__ == '__main__':
     obj = args.obj
     stage = args.stage
 
-    os.makedirs(f'mastDownload/{obj}', exist_ok=True)
+    os.makedirs(f'jwst_data/{obj}', exist_ok=True)
 
     coord = SkyCoord(ra, dec, frame = 'icrs', unit = 'deg')
     query_mast_jwst(coord)
