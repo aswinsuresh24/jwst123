@@ -47,7 +47,6 @@ def suppress_stdout():
             sys.stderr = old_stderr
 
 with suppress_stdout():
-    from drizzlepac import tweakreg,astrodrizzle,catalogs,photeq
     from astroquery.mast import Observations
     from astropy.coordinates import SkyCoord
 
@@ -65,7 +64,7 @@ def create_parser():
     parser.add_argument('--dec', type=str, help='DEC of the target', required=True)
     parser.add_argument('--radius', type=float, default = 3.0, help='Radius in arcminutes')
     parser.add_argument('--stage', type=int, default = 2, help='Stage of the reduction')
-    return parser.parse_args()
+    return parser
 
 def query_mast_jwst(coord):
     '''
@@ -98,7 +97,7 @@ def query_mast_jwst(coord):
     mask = [all(l) for l in list(map(list, zip(*masks)))]
     obsTable_webb = obsTable[mask]
 
-    for obs in obsTable_webb:
+    for obs in obsTable_webb[:1]:
         productList = Observations.get_product_list(obs)
         #product list masks
         productmasks = []
