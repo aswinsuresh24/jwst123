@@ -1,37 +1,13 @@
 import warnings
 warnings.filterwarnings('ignore')
-import stwcs
 import glob
 import sys
 import os
-import shutil
-import time
-import filecmp
-import astroquery
-import progressbar
-import copy
-import requests
-import random
 import argparse
 import astropy.wcs as wcs
 import numpy as np
 from contextlib import contextmanager
 from astropy import units as u
-from astropy.utils.data import clear_download_cache,download_file
-from astropy.io import fits
-from astropy.table import Table, Column, unique
-from astropy.time import Time
-from astroscrappy import detect_cosmics
-from stwcs import updatewcs
-from scipy.interpolate import interp1d
-
-# Internal dependencies
-from common import Constants
-from common import Options
-from common import Settings
-from common import Util
-from nbutils import get_filter, get_instrument, get_chip, get_filter, input_list
-from nbutils import get_zpt, add_visit_info, organize_reduction_tables, pick_deepest_images
 
 @contextmanager
 def suppress_stdout():
