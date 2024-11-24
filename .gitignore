@@ -5,7 +5,7 @@ __pycache__
 .vscode/
 mastDownload/
 raw/
-*jwstred*/
+*red*/
 *temp*/
 launch.sh
 *.fits

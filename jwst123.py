@@ -21,7 +21,7 @@ from contextlib import contextmanager
 from astropy import units as u
 from astropy.utils.data import clear_download_cache,download_file
 from astropy.io import fits
-from astropy.table import Table, Column, unique
+from astropy.table import Table, Column, unique, vstack
 from astropy.stats import sigma_clipped_stats
 from astropy.time import Time
 from astroscrappy import detect_cosmics
@@ -210,6 +210,30 @@ def jwst_phot(phot_img):
     refcat = Table.read(photfilename,format='ascii')
     return refcat, photfilename
 
+def create_filter_table(tables, filters):
+    '''
+    Create a dictionary of (filter, table) pairs for
+    the full observation set
+
+    Parameters
+    ----------
+    tables : list
+        List of tables
+    filters : list
+        Filter of each table
+
+    Returns
+    -------
+    filter_table : dict
+        Dictionary of (filter, table) pairs
+    '''
+    filter_table = dict.fromkeys(filters)
+    for flt in filter_table.keys():
+        flt_tables = [tbl_ for tbl_ in tables if tbl_['filter'][0] == flt]
+        filter_table[flt] = vstack(flt_tables)
+
+    return filter_table
+
 def generate_level3_mosaic(inputfiles, outdir):
     '''
     Create level3 drizzled mosaic from level2 input files
@@ -317,8 +341,8 @@ def create_alignment_mosaic(filter_table, outdir, work_dir):
 
         for row in grp_table:
             image = row['image']
-            if image == ref_image:
-                continue
+            # if image == ref_image:
+            #     continue
             dispersion = align_to_jwst(image, photfilename, outdir=outdir, verbose=False)
             print(f'Dispersion for {image}: {dispersion}"')
     # return align_table
@@ -328,7 +352,7 @@ def create_alignment_mosaic(filter_table, outdir, work_dir):
     mosaic_name = generate_level3_mosaic(inputfiles, outdir)
 
     #align the mosaic to Gaia
-    dispersion = align_to_gaia(mosaic_name, outdir, xshift = -30, yshift = 6, verbose=False)
+    dispersion = align_to_gaia(mosaic_name, outdir, xshift = 0, yshift = 0, verbose=False)
     jh_image = os.path.join(outdir, os.path.basename(mosaic_name).replace('i2d.fits', 'jhat.fits'))
     shutil.move(jh_image, jh_image.replace('jhat.fits', 'jhat_i2d.fits'))
     aligned_mosaic = jh_image.replace('jhat.fits', 'jhat_i2d.fits')
@@ -595,11 +619,11 @@ def align_to_gaia(align_image, outdir, xshift = 0, yshift = 0, verbose = False):
           yshift = yshift,
           sharpness_lim=(0.3,0.95),
           roundness1_lim=(-0.7, 0.7),
-          Nbright = 1500,
+        #   Nbright = 1500,
           SNR_min= 5,
           dmag_max=.1,
-          objmag_lim =(15,22),
-          refmag_lim = (12,19),
+        #   objmag_lim =(15,22),
+        #   refmag_lim = (12,19),
           binsize_px = 1.0,
           saveplots = 0,
           slope_min = -20/2048,
@@ -761,8 +785,11 @@ def create_dirs(work_dir, obj):
         Output directory
     '''
     outdir = os.path.join(work_dir, obj, 'nircam')
+    aligndir = os.path.join(work_dir, 'align')
     if not os.path.exists(outdir):
         os.makedirs(outdir)
+    if not os.path.exists(aligndir):
+        os.makedirs(aligndir)
     return outdir
 
 if __name__ == '__main__':
@@ -778,7 +805,7 @@ if __name__ == '__main__':
     tables = organize_reduction_tables(table, byvisit=True, bymodule=False)
     for tbl in tables:
         filters = [r['filter'][0] for r in tbl]
-        filter_table = dict(zip(filters, tbl))
+        filter_table = create_filter_table(tbl, filters)
         mosaic_name = create_alignment_mosaic(filter_table, os.path.join(work_dir, 'align'), work_dir)
         mosaic_photfile = fix_phot(mosaic_name)
         print(f'Mosaic photfile: {mosaic_photfile}')
