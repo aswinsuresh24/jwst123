@@ -170,6 +170,11 @@ def add_alignment_groups(table):
         pgons.append(shapely.Polygon(coords.reshape(4, 2)))
     
     footprint = shapely.unary_union(pgons)
+    #convert to multipolygon if needed (for single observation footprint)
+    if type(footprint) == shapely.geometry.polygon.Polygon:
+        footprint = shapely.MultiPolygon([footprint])
+        
+    #separate the footprint into spatially distinct groups
     for geom_ in footprint.geoms:
         align_groups.append(geom_)
 
