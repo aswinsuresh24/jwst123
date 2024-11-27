@@ -163,29 +163,42 @@ def add_alignment_groups(table):
     table : astropy.table.Table
         Table with alignment groups and overlap area added
     '''
-    pgons, align_groups = [], []
+    pgons, guide_star_id = [], []
+    table_indices = np.arange(len(table))
     for im in table['image']:
         region = fits.open(im)['SCI'].header['S_REGION']
         coords = np.array(region.split('POLYGON ICRS  ')[1].split(' '), dtype = float)
         pgons.append(shapely.Polygon(coords.reshape(4, 2)))
-    
-    footprint = shapely.unary_union(pgons)
-    #convert to multipolygon if needed (for single observation footprint)
-    if type(footprint) == shapely.geometry.polygon.Polygon:
-        footprint = shapely.MultiPolygon([footprint])
-        
-    #separate the footprint into spatially distinct groups
-    for geom_ in footprint.geoms:
-        align_groups.append(geom_)
+        guide_star_id.append(fits.getval(im, 'GDSTARID', ext=0))
 
-    align_idx, overlap = [], []
-    for i, polygon_ in enumerate(pgons):
-        intersect_area = np.array([shapely.intersection(polygon_, gm_).area/polygon_.area for gm_ in align_groups])
-        align_idx.append(np.argmax(intersect_area))
-        overlap.append(np.max(intersect_area))
-    
-    table.add_column(Column(name='aligngroup', data=align_idx))
-    table.add_column(Column(name='overlap', data=overlap))
+    #for each guide star, find a reference image for each image
+    #and add the filename of the image to the table
+    guide_star_id, pgons = np.array(guide_star_id), np.array(pgons)
+    table.add_column(Column(name='gdstar', data=guide_star_id))
+    table.add_column(Column(name='ref_img', data=[None]*len(table)))
+    for gdstar in np.unique(guide_star_id):
+        align_groups = np.array([])
+        gdstar_mask = guide_star_id == gdstar
+        gdstar_pgons = pgons[gdstar_mask]
+        footprint = shapely.unary_union(gdstar_pgons)
+        #convert to multipolygon if needed (for single observation footprint)
+        if type(footprint) == shapely.geometry.polygon.Polygon:
+            footprint = shapely.MultiPolygon([footprint])
+        
+        #separate the footprint into spatially distinct groups
+        for geom_ in footprint.geoms:
+            align_groups = np.append(align_groups, geom_)
+            
+        align_idx, overlap = [], []
+        for i, polygon_ in enumerate(gdstar_pgons):
+            intersect_area = np.array([shapely.intersection(polygon_, gm_).area/polygon_.area for gm_ in align_groups])
+            align_idx.append(np.argmax(intersect_area))
+            overlap.append(np.max(intersect_area))
+
+        for aln_idx in np.unique(align_idx):
+            aln_mask = np.array(align_idx) == aln_idx
+            ref_image = pick_deepest_image(table[gdstar_mask][aln_mask])['image']
+            table['ref_img'][table_indices[gdstar_mask][aln_mask]] = ref_image
         
     return table
 
@@ -334,23 +347,13 @@ def create_alignment_mosaic(filter_table, outdir, work_dir):
     #add alignment groups to the table to pick corect
     #reference image for each module
     align_table = add_alignment_groups(align_table)
-    
-    #for each alignment group, pick a reference
-    #image and align the rest of the images to it
-    for grp in np.unique(align_table['aligngroup']):
-        grp_table = align_table[align_table['aligngroup'] == grp]
-        ref_image = pick_deepest_image(grp_table)
-        ref_image = ref_image['image']
-        refcat, photfilename = jwst_phot(ref_image)
-        module = grp_table['module']   
 
-        for row in grp_table:
-            image = row['image']
-            # if image == ref_image:
-            #     continue
-            dispersion = align_to_jwst(image, photfilename, outdir=outdir, verbose=False)
-            print(f'Dispersion for {image}: {dispersion}"')
-    # return align_table
+    for row in align_table:
+        image = row['image']
+        ref_image = row['ref_img']
+        refcat, photfilename = jwst_phot(ref_image)
+        dispersion = align_to_jwst(image, photfilename, outdir=outdir, verbose=False)
+        print(f'Dispersion for {image}: {dispersion}"')
 
     #create i2d mosaic from relative aligned images
     inputfiles = glob.glob(f'{outdir}/*long*jhat*.fits') #this does not account for bymodule=True
@@ -811,18 +814,22 @@ if __name__ == '__main__':
     for tbl in tables:
         filters = [r['filter'][0] for r in tbl]
         filter_table = create_filter_table(tbl, filters)
+        filter_table = {k: v for k, v in filter_table.items() 
+                        if k in ['f115w', 'f150w', 'f200w', 'f277w', 'f360m']}
         mosaic_name = create_alignment_mosaic(filter_table, os.path.join(work_dir, 'align'), work_dir)
         mosaic_photfile = fix_phot(mosaic_name)
         print(f'Mosaic photfile: {mosaic_photfile}')
         for filt, tbl in filter_table.items():
             if filt == 'f277w':
-                gaia_offset = (-30, 6)
+                gaia_offset = (0, 0)
             else:
-                gaia_offset = (-61, 12)
+                gaia_offset = (0, 0)
             align_to_mosaic(mosaic_photfile, [r['image'] for r in tbl], os.path.join(work_dir, 'jhat'), 
                             gaia_offset = gaia_offset, verbose = False)
         aligned_images = glob.glob(os.path.join(work_dir, 'jhat', f'*nrc*jhat.fits'))
-        refname = generate_level3_mosaic(aligned_images, os.path.join(work_dir, 'jhat'))
+        align_list = input_list(aligned_images)
+        refname = generate_level3_mosaic(align_list[align_list['filter'] == 'f090w']['image'],
+                                        os.path.join(work_dir, 'jhat'))
         print('Dolphot reference image:', refname)
         
         #copy files to dolphot directory

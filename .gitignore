@@ -14,5 +14,7 @@ launch.sh
 *.txt
 *.csv
 *.png
+*.dat
 plots.ipynb
 pipeline.ipynb
+bug.ipynb
