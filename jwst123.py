@@ -439,21 +439,50 @@ def generate_dolphot_paramfile(basedir):
     phot_image_base = [os.path.basename(r).replace('.fits', '') for r in phot_images]
     phot_image_det = ['long' if 'long' in get_detector_chip(r) else 'short' for r in phot_images]
     N_img = len(phot_images)
-    with open('jwstred_temp_dolphot/m92/nircam/dolphot.param', 'w') as f:
-        f.write('Nimg = {}\n'.format(N_img))
-        f.write('img0_file = {}\n'.format(os.path.basename(ref_image).replace('.fits', '')))
-        # f.write('\n')
-        for i, (img, det) in enumerate(zip(phot_image_base, phot_image_det)):
-            f.write('img{}_file = {}\n'.format(i+1, img))
-            if det == 'short':
-                for key, val in short_params.items():
-                    f.write('img{}_{} = {}\n'.format(i+1, key, val))
-            if det == 'long':
-                for key, val in long_params.items():
-                    f.write('img{}_{} = {}\n'.format(i+1, key, val))
+    #dolphot can only process 99 images at a time
+    #write the multiple param files in chunks of 99 images
+    #with the same reference image
+    paramfiles = []
+    if N_img > 98:
+        N_chunks = int(N_img/98) + 1
+        for i in range(N_chunks):
+            paramfiles.append(f'dolphot_{i}.param')
+            n_file = 98 if i < N_chunks - 1 else N_img - i*98
+            with open(f'{basedir}/dolphot_{i}.param', 'w') as f:
+                f.write('Nimg = {}\n'.format(n_file))
+                f.write('img0_file = {}\n'.format(os.path.basename(ref_image).replace('.fits', '')))
+
+                for j, (img, det) in enumerate(zip(phot_image_base[i*98:(i+1)*98], phot_image_det[i*98:(i+1)*98])):
+                    f.write('img{}_file = {}\n'.format(j+1, img))
+                    if det == 'short':
+                        for key, val in short_params.items():
+                            f.write('img{}_{} = {}\n'.format(j+1, key, val))
+                    if det == 'long':
+                        for key, val in long_params.items():
+                            f.write('img{}_{} = {}\n'.format(j+1, key, val))
+                    # f.write('\n')
+                for key, val in base_params.items():
+                    f.write('{} = {}\n'.format(key, val))
+
+    else:
+        paramfiles.append(f'dolphot.param')
+        with open(f'{basedir}/dolphot.param', 'w') as f:
+            f.write('Nimg = {}\n'.format(N_img))
+            f.write('img0_file = {}\n'.format(os.path.basename(ref_image).replace('.fits', '')))
             # f.write('\n')
-        for key, val in base_params.items():
-            f.write('{} = {}\n'.format(key, val))
+            for i, (img, det) in enumerate(zip(phot_image_base, phot_image_det)):
+                f.write('img{}_file = {}\n'.format(i+1, img))
+                if det == 'short':
+                    for key, val in short_params.items():
+                        f.write('img{}_{} = {}\n'.format(i+1, key, val))
+                if det == 'long':
+                    for key, val in long_params.items():
+                        f.write('img{}_{} = {}\n'.format(i+1, key, val))
+                # f.write('\n')
+            for key, val in base_params.items():
+                f.write('{} = {}\n'.format(key, val))
+    
+    return paramfiles
 
 def cut_gaia_sources(image, table_gaia):
     ''''
@@ -828,7 +857,7 @@ if __name__ == '__main__':
                             gaia_offset = gaia_offset, verbose = False)
         aligned_images = glob.glob(os.path.join(work_dir, 'jhat', f'*nrc*jhat.fits'))
         align_list = input_list(aligned_images)
-        refname = generate_level3_mosaic(align_list[align_list['filter'] == 'f090w']['image'],
+        refname = generate_level3_mosaic(align_list[align_list['filter'] == 'f115w']['image'],
                                         os.path.join(work_dir, 'jhat'))
         print('Dolphot reference image:', refname)
         
@@ -840,11 +869,12 @@ if __name__ == '__main__':
             shutil.copy(fl, dolphot_basedir)
 
         #generate dolphot param file
-        generate_dolphot_paramfile(dolphot_basedir)
+        paramfiles = generate_dolphot_paramfile(dolphot_basedir)
         #switch directory to basedir
         os.chdir(dolphot_basedir)
         #run dolphot
         dolphot_images = glob.glob('*fits')
         apply_nircammask(dolphot_images)
         calc_cky(dolphot_images)
-        subprocess.run(f'dolphot {obj}.phot -pdolphot.param', shell=True)
+        for i, paramfile in enumerate(paramfiles):
+            subprocess.run(f'dolphot {obj}_{i}.phot -p{paramfile}', shell=True)
