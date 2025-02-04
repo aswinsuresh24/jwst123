@@ -136,7 +136,7 @@ def save_photfiles(photfile_path, outdir, obj, chunksize = 100000):
             #generate index by combining x and y positions
             #the x, y positions are rounded to the floor of the value since dolphot output 
             #does not use the same star center from different runs
-            df_idx = np.apply_along_axis(lambda x: '_'.join(x), 0, np.stack((_df[2].to_numpy(dtype = str), _df[3].to_numpy(dtype = str))))
+            # df_idx = np.apply_along_axis(lambda x: '_'.join(x), 0, np.stack((_df[2].to_numpy(dtype = str), _df[3].to_numpy(dtype = str))))
             df_idx = ["{:.2f}_{:.2f}".format(i, j) for i, j in zip(np.floor(np.array(_df[2])), np.floor(np.array(_df[3])))]
             _df['idx'] = df_idx
             _df.set_index('idx', inplace = True)
