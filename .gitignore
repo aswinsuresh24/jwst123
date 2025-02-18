@@ -17,6 +17,7 @@ launch.sh
 *.dat
 *.phot
 *.columns
+*.pages
 plots.ipynb
 pipeline.ipynb
 bug.ipynb
