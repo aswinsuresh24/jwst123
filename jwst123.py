@@ -176,31 +176,89 @@ def add_alignment_groups(table):
     guide_star_id, pgons = np.array(guide_star_id), np.array(pgons)
     table.add_column(Column(name='gdstar', data=guide_star_id))
     table.add_column(Column(name='ref_img', data=[None]*len(table)))
-    for gdstar in np.unique(guide_star_id):
-        align_groups = np.array([])
-        gdstar_mask = guide_star_id == gdstar
-        gdstar_pgons = pgons[gdstar_mask]
-        footprint = shapely.unary_union(gdstar_pgons)
-        #convert to multipolygon if needed (for single observation footprint)
-        if type(footprint) == shapely.geometry.polygon.Polygon:
-            footprint = shapely.MultiPolygon([footprint])
+    # for gdstar in np.unique(guide_star_id):
+    #     align_groups = np.array([])
+    #     gdstar_mask = guide_star_id == gdstar
+    #     gdstar_pgons = pgons[gdstar_mask]
+    #     footprint = shapely.unary_union(gdstar_pgons)
+    #     #convert to multipolygon if needed (for single observation footprint)
+    #     if type(footprint) == shapely.geometry.polygon.Polygon:
+    #         footprint = shapely.MultiPolygon([footprint])
         
-        #separate the footprint into spatially distinct groups
-        for geom_ in footprint.geoms:
-            align_groups = np.append(align_groups, geom_)
+    #     #separate the footprint into spatially distinct groups
+    #     for geom_ in footprint.geoms:
+    #         align_groups = np.append(align_groups, geom_)
             
-        align_idx, overlap = [], []
-        for i, polygon_ in enumerate(gdstar_pgons):
-            intersect_area = np.array([shapely.intersection(polygon_, gm_).area/polygon_.area for gm_ in align_groups])
-            align_idx.append(np.argmax(intersect_area))
-            overlap.append(np.max(intersect_area))
+    #     align_idx, overlap = [], []
+    #     for i, polygon_ in enumerate(gdstar_pgons):
+    #         intersect_area = np.array([shapely.intersection(polygon_, gm_).area/polygon_.area for gm_ in align_groups])
+    #         align_idx.append(np.argmax(intersect_area))
+    #         overlap.append(np.max(intersect_area))
 
-        for aln_idx in np.unique(align_idx):
-            aln_mask = np.array(align_idx) == aln_idx
-            ref_image = pick_deepest_image(table[gdstar_mask][aln_mask])['image']
-            table['ref_img'][table_indices[gdstar_mask][aln_mask]] = ref_image
+    #     for aln_idx in np.unique(align_idx):
+    #         aln_mask = np.array(align_idx) == aln_idx
+    #         ref_image = pick_deepest_image(table[gdstar_mask][aln_mask])['image']
+    #         table['ref_img'][table_indices[gdstar_mask][aln_mask]] = ref_image
         
+    for gdstar in np.unique(guide_star_id):
+        gdstar_mask = guide_star_id == gdstar
+        for chip in np.unique(table[gdstar_mask]['chip']):
+            chip_mask = table[gdstar_mask]['chip'] == chip
+            ref_image = pick_deepest_image(table[gdstar_mask][chip_mask])['image']
+            table['ref_img'][table_indices[gdstar_mask][chip_mask]] = ref_image
+
     return table
+
+def visit_filter_dict(table):
+    '''
+    Find the filter in each visit which has the maximum spatial
+    coverage for the visit
+
+    Parameters
+    ----------
+    table : astropy.table.Table
+        Input list table
+
+    Returns
+    -------
+    flt_vis_dict : dict
+        Dictionary mapping the filter in which the alignment
+        mosaic will be created, to each visit
+    '''
+    visits = np.unique(table['visit']).value
+    flt_vis_dict = dict.fromkeys(visits)
+    for vis in visits:
+        tbl = table[table['visit'] == vis]
+        net_polygon = []
+        filters = np.unique(tbl['filter']).value
+        for filt in filters:
+            pgons = []
+            ft = tbl[tbl['filter'] == filt]
+            for im in ft['image']:
+                region = fits.open(im)['SCI'].header['S_REGION']
+                coords = np.array(region.split('POLYGON ICRS  ')[1].split(' '), dtype = float)
+                pgons.append(shapely.Polygon(coords.reshape(4, 2)))
+            net_polygon.append(shapely.unary_union(pgons))
+
+        area = []
+        for pl_ in net_polygon:
+            area.append(pl_.area)
+
+        align_filter = filters[np.argmax(area)]
+        flt_vis_dict[vis] = align_filter
+
+        #implement recursive reordering of visits within a visit if maximum area mosaic doesn't cover all filters
+        # intersection area is 96.8% for sw overlapping with lw filters
+        # align_mosaic = net_polygon[np.argmax(area)]
+        # intersection_area = [shapely.intersection(i, align_mosaic).area/i.area for i in net_polygon]
+        # mask = intersection_area < 0.99
+        # revisit_filters = filters[mask]
+
+        # revisit_area =[]
+        # for pl_ in net_polygon[mask]:
+        #     revisit_area.append()
+        
+    return flt_vis_dict
 
 def jwst_phot(phot_img):
     '''
@@ -233,6 +291,9 @@ def create_filter_table(tables, filters):
     Create a dictionary of (filter, table) pairs for
     the full observation set
 
+    This is useful to collect all observations in a 
+    patricular filter when the observation is a mix
+
     Parameters
     ----------
     tables : list
@@ -247,8 +308,8 @@ def create_filter_table(tables, filters):
     '''
     filter_table = dict.fromkeys(filters)
     for flt in filter_table.keys():
-        flt_tables = [tbl_ for tbl_ in tables if tbl_['filter'][0] == flt]
-        filter_table[flt] = vstack(flt_tables)
+        # flt_tables = [tbl_ for tbl_ in tables if tbl_['filter'][0] == flt]
+        filter_table[flt] = tables[tables['filter'] == flt] #vstack(flt_tables)
 
     return filter_table
 
@@ -313,10 +374,10 @@ def generate_level3_mosaic(inputfiles, outdir):
     mosaic_name = f'{outdir_level3}/{filter_name}_i2d.fits'
     return mosaic_name
 
-def create_alignment_mosaic(filter_table, outdir, work_dir):
+def create_alignment_mosaic(filter_table, outdir, work_dir, infilter=None):
     '''
     Create an alignement i2d mosiac from best available
-    long wavelength filters
+    long wavelength filters or in the given input filter
 
     Parameters
     ----------
@@ -324,6 +385,9 @@ def create_alignment_mosaic(filter_table, outdir, work_dir):
         Input list table
     outdir : str
         Output directory for jhat aligned images
+    infilter : str
+        Input filter to create the mosaic
+        If not given it is picked from a predefined list
 
     Returns
     -------
@@ -336,11 +400,15 @@ def create_alignment_mosaic(filter_table, outdir, work_dir):
     #pick the best filter present in filter_table.keys() 
     #that appears first in good_filters
     align_table = None
-    for filt in good_filters:
-        if filt in filter_table:
-            align_table = filter_table[filt]
-            break
-    
+    if infilter:
+        if infilter in filter_table:
+            align_table = filter_table[infilter]
+    else:
+        for filt in good_filters:
+            if filt in filter_table:
+                align_table = filter_table[filt]
+                break
+        
     if align_table is None:
         raise ValueError('No compatible alignment filter found')
     
@@ -356,7 +424,8 @@ def create_alignment_mosaic(filter_table, outdir, work_dir):
         print(f'Dispersion for {image}: {dispersion}"')
 
     #create i2d mosaic from relative aligned images
-    inputfiles = glob.glob(f'{outdir}/*long*jhat*.fits') #this does not account for bymodule=True
+    # inputfiles = glob.glob(f'{outdir}/*long*jhat*.fits') #this does not account for bymodule=True
+    inputfiles = [os.path.join(outdir,os.path.basename(i.replace('cal.fits', 'jhat.fits'))) for i in tbl['image']]
     mosaic_name = generate_level3_mosaic(inputfiles, outdir)
 
     #align the mosaic to Gaia
@@ -643,7 +712,7 @@ def align_to_gaia(align_image, outdir, xshift = 0, yshift = 0, verbose = False):
           telescope='jwst',
           outsubdir=outdir,
           overwrite=True,
-          d2d_max=2.0,
+          d2d_max=1.0,
           find_stars_threshold = 3,
           showplots=0,
           refcatname='Gaia',
@@ -659,7 +728,7 @@ def align_to_gaia(align_image, outdir, xshift = 0, yshift = 0, verbose = False):
         #   Nbright = 1500,
           SNR_min= 5,
           dmag_max=.1,
-        #   objmag_lim =(15,22),
+          objmag_lim =(15,22),
         #   refmag_lim = (12,19),
           binsize_px = 1.0,
           saveplots = 0,
@@ -839,13 +908,15 @@ if __name__ == '__main__':
 
     input_images = get_input_images(workdir=work_dir)
     table = input_list(input_images)
+    flt_vis_dict = visit_filter_dict(table)
     tables = organize_reduction_tables(table, byvisit=True, bymodule=False)
-    for tbl in tables:
-        filters = [r['filter'][0] for r in tbl]
+    for tbl in tables[0]:
+        filters = np.unique(tbl['filter']).value
         filter_table = create_filter_table(tbl, filters)
-        filter_table = {k: v for k, v in filter_table.items() 
-                        if k in ['f115w', 'f150w', 'f200w', 'f277w', 'f360m']}
-        mosaic_name = create_alignment_mosaic(filter_table, os.path.join(work_dir, 'align'), work_dir)
+        # filter_table = {k: v for k, v in filter_table.items() 
+        #                 if k in ['f150w', 'f187n', 'f300m', 'f335m']}
+        mosaic_name = create_alignment_mosaic(filter_table, os.path.join(work_dir, 'align'), work_dir,
+                                              infilter = flt_vis_dict[np.unique(tbl['visit']).value[0]])
         mosaic_photfile = fix_phot(mosaic_name)
         print(f'Mosaic photfile: {mosaic_photfile}')
         for filt, tbl in filter_table.items():
@@ -857,7 +928,7 @@ if __name__ == '__main__':
                             gaia_offset = gaia_offset, verbose = False)
         aligned_images = glob.glob(os.path.join(work_dir, 'jhat', f'*nrc*jhat.fits'))
         align_list = input_list(aligned_images)
-        refname = generate_level3_mosaic(align_list[align_list['filter'] == 'f115w']['image'],
+        refname = generate_level3_mosaic(align_list[align_list['filter'] == 'f150w']['image'],
                                         os.path.join(work_dir, 'jhat'))
         print('Dolphot reference image:', refname)
         

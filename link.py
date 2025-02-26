@@ -11,8 +11,10 @@ def create_parser():
         arg parser
     '''
     parser = argparse.ArgumentParser(description='Symlink data for jwst123 run')
-    parser.add_argument('--datadir', type=str, help='Directory with object data', required=True)
-    parser.add_argument('--symlinkdir', type=str, help='Directory to create symlinks', required=True)
+    parser.add_argument('--datadir', type=str, help='Full path to directory with object data', required=True)
+    parser.add_argument('--symlinkdir', type=str, 
+                        help='Full path to directory containing the raw directory, in which symlinks will be created', 
+                        required=True)
     return parser
 
 def create_symlink(src, dst):

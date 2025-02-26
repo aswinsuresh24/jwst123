@@ -166,7 +166,8 @@ def add_visit_info(obstable):
                             for obs in obstable]
             filtmask = [f == filt for f in obstable['filter']]
             nzero = obstable['visit'] != 0 # Ignore unassigned visits
-            mask = [all(l) for l in zip(instmask, timemask, filtmask, nzero)]
+            # mask = [all(l) for l in zip(instmask, timemask, filtmask, nzero)]
+            mask = [all(l) for l in zip(instmask, timemask, nzero)]
 
             # If no matches, then we need to define a new visit
             if not any(mask):
