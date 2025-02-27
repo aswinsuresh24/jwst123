@@ -376,6 +376,33 @@ def input_list(input_images):
         
     return obstable
 
+def create_filter_table(tables, filters):
+    '''
+    Create a dictionary of (filter, table) pairs for
+    the full observation set
+
+    This is useful to collect all observations in a 
+    patricular filter when the observation is a mix
+
+    Parameters
+    ----------
+    tables : list
+        List of tables
+    filters : list
+        Filter of each table
+
+    Returns
+    -------
+    filter_table : dict
+        Dictionary of (filter, table) pairs
+    '''
+    filter_table = dict.fromkeys(filters)
+    for flt in filter_table.keys():
+        # flt_tables = [tbl_ for tbl_ in tables if tbl_['filter'][0] == flt]
+        filter_table[flt] = tables[tables['filter'] == flt] #vstack(flt_tables)
+
+    return filter_table
+
 def xmatch_common(skycrd_1, skycrd_2, dist_limit = 5.0):
     """
     crossmatch sources between two SkyCoord objects

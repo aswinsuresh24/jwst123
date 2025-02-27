@@ -46,7 +46,7 @@ from common import Settings
 from common import Util
 from nircam_setttings import base_params, short_params, long_params
 from nbutils import get_filter, get_instrument, get_chip, get_filter, input_list, xmatch_common
-from nbutils import get_zpt, add_visit_info, organize_reduction_tables, pick_deepest_images
+from nbutils import get_zpt, add_visit_info, organize_reduction_tables, pick_deepest_images, create_filter_table
 
 @contextmanager
 def suppress_stdout():
@@ -148,7 +148,7 @@ def pick_deepest_image(table):
     deepest_image = table[exptimes.index(max(exptimes))]
     return deepest_image
 
-def add_alignment_groups(table):
+def add_alignment_groups(table, shapely=False):
     '''
     Add alignment groups to the table calculated from the image
     polygon overlap area
@@ -157,6 +157,9 @@ def add_alignment_groups(table):
     ----------
     table : astropy.table.Table
         Input list table
+    shapely: Bool
+        find alignment groups using spatially distinct shapely
+        geometries - fails in certain dither patterns
 
     Returns
     -------
@@ -176,36 +179,37 @@ def add_alignment_groups(table):
     guide_star_id, pgons = np.array(guide_star_id), np.array(pgons)
     table.add_column(Column(name='gdstar', data=guide_star_id))
     table.add_column(Column(name='ref_img', data=[None]*len(table)))
-    # for gdstar in np.unique(guide_star_id):
-    #     align_groups = np.array([])
-    #     gdstar_mask = guide_star_id == gdstar
-    #     gdstar_pgons = pgons[gdstar_mask]
-    #     footprint = shapely.unary_union(gdstar_pgons)
-    #     #convert to multipolygon if needed (for single observation footprint)
-    #     if type(footprint) == shapely.geometry.polygon.Polygon:
-    #         footprint = shapely.MultiPolygon([footprint])
-        
-    #     #separate the footprint into spatially distinct groups
-    #     for geom_ in footprint.geoms:
-    #         align_groups = np.append(align_groups, geom_)
+    if shapely:
+        for gdstar in np.unique(guide_star_id):
+            align_groups = np.array([])
+            gdstar_mask = guide_star_id == gdstar
+            gdstar_pgons = pgons[gdstar_mask]
+            footprint = shapely.unary_union(gdstar_pgons)
+            #convert to multipolygon if needed (for single observation footprint)
+            if type(footprint) == shapely.geometry.polygon.Polygon:
+                footprint = shapely.MultiPolygon([footprint])
             
-    #     align_idx, overlap = [], []
-    #     for i, polygon_ in enumerate(gdstar_pgons):
-    #         intersect_area = np.array([shapely.intersection(polygon_, gm_).area/polygon_.area for gm_ in align_groups])
-    #         align_idx.append(np.argmax(intersect_area))
-    #         overlap.append(np.max(intersect_area))
+            #separate the footprint into spatially distinct groups
+            for geom_ in footprint.geoms:
+                align_groups = np.append(align_groups, geom_)
+                
+            align_idx, overlap = [], []
+            for i, polygon_ in enumerate(gdstar_pgons):
+                intersect_area = np.array([shapely.intersection(polygon_, gm_).area/polygon_.area for gm_ in align_groups])
+                align_idx.append(np.argmax(intersect_area))
+                overlap.append(np.max(intersect_area))
 
-    #     for aln_idx in np.unique(align_idx):
-    #         aln_mask = np.array(align_idx) == aln_idx
-    #         ref_image = pick_deepest_image(table[gdstar_mask][aln_mask])['image']
-    #         table['ref_img'][table_indices[gdstar_mask][aln_mask]] = ref_image
-        
-    for gdstar in np.unique(guide_star_id):
-        gdstar_mask = guide_star_id == gdstar
-        for chip in np.unique(table[gdstar_mask]['chip']):
-            chip_mask = table[gdstar_mask]['chip'] == chip
-            ref_image = pick_deepest_image(table[gdstar_mask][chip_mask])['image']
-            table['ref_img'][table_indices[gdstar_mask][chip_mask]] = ref_image
+            for aln_idx in np.unique(align_idx):
+                aln_mask = np.array(align_idx) == aln_idx
+                ref_image = pick_deepest_image(table[gdstar_mask][aln_mask])['image']
+                table['ref_img'][table_indices[gdstar_mask][aln_mask]] = ref_image
+    else:        
+        for gdstar in np.unique(guide_star_id):
+            gdstar_mask = guide_star_id == gdstar
+            for chip in np.unique(table[gdstar_mask]['chip']):
+                chip_mask = table[gdstar_mask]['chip'] == chip
+                ref_image = pick_deepest_image(table[gdstar_mask][chip_mask])['image']
+                table['ref_img'][table_indices[gdstar_mask][chip_mask]] = ref_image
 
     return table
 
@@ -286,32 +290,6 @@ def jwst_phot(phot_img):
     refcat = Table.read(photfilename,format='ascii')
     return refcat, photfilename
 
-def create_filter_table(tables, filters):
-    '''
-    Create a dictionary of (filter, table) pairs for
-    the full observation set
-
-    This is useful to collect all observations in a 
-    patricular filter when the observation is a mix
-
-    Parameters
-    ----------
-    tables : list
-        List of tables
-    filters : list
-        Filter of each table
-
-    Returns
-    -------
-    filter_table : dict
-        Dictionary of (filter, table) pairs
-    '''
-    filter_table = dict.fromkeys(filters)
-    for flt in filter_table.keys():
-        # flt_tables = [tbl_ for tbl_ in tables if tbl_['filter'][0] == flt]
-        filter_table[flt] = tables[tables['filter'] == flt] #vstack(flt_tables)
-
-    return filter_table
 
 def generate_level3_mosaic(inputfiles, outdir):
     '''
@@ -458,7 +436,7 @@ def apply_nircammask(files):
 
     subprocess.run(cmd)  
 
-def calc_cky(files):
+def calc_sky(files):
     '''
     Calculate the sky for input files
 
@@ -712,7 +690,7 @@ def align_to_gaia(align_image, outdir, xshift = 0, yshift = 0, verbose = False):
           telescope='jwst',
           outsubdir=outdir,
           overwrite=True,
-          d2d_max=1.0,
+          d2d_max=2.0,
           find_stars_threshold = 3,
           showplots=0,
           refcatname='Gaia',
@@ -946,6 +924,6 @@ if __name__ == '__main__':
         #run dolphot
         dolphot_images = glob.glob('*fits')
         apply_nircammask(dolphot_images)
-        calc_cky(dolphot_images)
+        calc_sky(dolphot_images)
         for i, paramfile in enumerate(paramfiles):
             subprocess.run(f'dolphot {obj}_{i}.phot -p{paramfile}', shell=True)
