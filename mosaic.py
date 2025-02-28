@@ -10,6 +10,8 @@ from jwst.associations import asn_from_list
 from jwst.associations.lib.rules_level3_base import DMS_Level3_Base
 import shapely
 import matplotlib.pyplot as plt
+import shutil
+from pathlib import Path
 
 from astropy.modeling import models
 from astropy import coordinates as coord
@@ -23,7 +25,7 @@ from astropy.nddata import CCDData
 from astropy import nddata
 from ccdproc import Combiner
 
-import webbpsf
+import stpsf
 from astropy.stats import sigma_clipped_stats as scs
 from photutils.psf.matching import resize_psf, SplitCosineBellWindow, create_matching_kernel, CosineBellWindow, TukeyWindow, TopHatWindow, HanningWindow
 from astropy.convolution import convolve, convolve_fft
@@ -161,23 +163,26 @@ def create_coadd_mosaic(table, outdir, filt, centroid=None,
     return filepath
 
 
-def create_gwcs(sci_header, outdir):
+def create_gwcs(wcs_out, shape_out, outdir):
     '''
-    Convert WCS from the science header to a GWCS object and write it 
-    into a file
+    Convert astropy WCS to a GWCS object and write it into an asdf file
 
     Parameters
     ----------
-    sci_header : astropy.io.fits.header.Header
-        Science header containing WCS information
-    outdir: str
-        Path to output directory where GWCS asdf file will be saved
+    wcs_out : astropy.wcs.WCS
+        Astropy WCS to be converted to gwcs
+    shape_out : tuple
+        (NAXIS2, NAXIS1) shape of output mosaic
 
     Returns
     -------
     gwcs_path: str
         Path to the GWCS asdf file
     '''
+    sci_header = wcs_out.to_header()
+    sci_header['NAXIS1'] = shape_out[1]
+    sci_header['NAXIS2'] = shape_out[0]
+
     shift_by_crpix = models.Shift(-(sci_header['CRPIX1'] - 1)) & models.Shift(-(sci_header['CRPIX2'] - 1))
     matrix = np.array([[sci_header['PC1_1'], sci_header['PC1_2']],
                     [sci_header['PC2_1'] , sci_header['PC2_2']]])
@@ -209,57 +214,48 @@ def create_gwcs(sci_header, outdir):
 
     return gwcs_path
 
-def find_centroid(filter_table, plot=False):
-    '''
-    Find the centroid and output shape of the drizzled image in the 
-    broadest filter to propagate to other filters
-
-    Parameters
-    ----------
-    filter_table : dict
-        Dictionary of filter-organized observations
-    plot: Bool
-        Plot the observation footprint from the WCS of one of the images
-
-    Returns
-    -------
-    centroid: shapely.geometry.point.Point
-        Centroid of the drizzled field
-    output_shape: tuple
-        (xbound, ybound) for the drizzled field
-    '''
+def find_optimal_wcs(filter_table):
     images = np.hstack([filter_table[i]['image'].value for i in filter_table.keys()])
-    pgons = []
-    for img in images:
-        region = fits.getval(img, 'S_REGION', ext=1)
-        coords = np.array(region.split('POLYGON ICRS  ')[1].split(' '), dtype = float)
-        pgons.append(shapely.Polygon(coords.reshape(4, 2)))
+    image_hdus = [fits.open(i)[1] for i in images]
+    wcs_out, shape_out = find_optimal_celestial_wcs(image_hdus, auto_rotate = True)
 
-    net_field = shapely.unary_union(pgons)
-    centroid = net_field.centroid
+    return wcs_out, shape_out
 
-    if type(net_field) == shapely.geometry.polygon.Polygon:
-        net_field = shapely.MultiPolygon([net_field])
+def create_psf_kernel(ref_filter: str, in_filter: str, ovs=5, fov=81):
+    nrc = stpsf.NIRCam()
+    nrc.filter = in_filter.upper()
+    nrc.detector = 'NRCA3'
+    psf_src = nrc.calc_psf(oversample=ovs, fov_pixels=fov) 
 
-    #collect edge points of the net field
-    points = []
-    for polygon in net_field.geoms:
-        points.extend([list(i) for i in polygon.exterior.coords[:-1]])
-    points = np.array(points)
+    #use detector distorted version
+    psf_src_dat = psf_src[3].data/psf_src[3].data.sum()
 
-    hdu = fits.open(images[0])
-    w = wcs.WCS(hdu['SCI'].header)
+    nrc.filter = ref_filter.upper()
+    psf_ref = nrc.calc_psf(oversample=ovs, fov_pixels=fov)
+    psf_ref_dat = psf_ref[3].data/psf_ref[3].data.sum()
 
-    #convert from ra, dec to pixel coordinates
-    cvt = w.all_world2pix(points, 0)
-    xb, yb = int(max(cvt[:, 0]) - min(cvt[:, 0])), int(max(cvt[:, 1]) - min(cvt[:, 1]))
-    output_shape = (xb+1000, yb+1000)
+    window = SplitCosineBellWindow(1.5, 1.3)
+    psf_kernel = create_matching_kernel(psf_src_dat, psf_ref_dat, window=window) 
 
-    if plot:
-        plt.scatter(cvt[:,0], cvt[:,1], marker = 'o', s = 2, color = 'blue')
-        plt.show()
-    
-    return centroid, output_shape
+    return psf_kernel
+
+def convolve_images(filter_table, target_filter):
+    for filt in filter_table.keys():
+        if filt.upper() == target_filter.upper():
+            continue
+        psf_kernel = create_psf_kernel(target_filter, filt)
+        tbl = filter_table[filt]
+        for im in tbl['image']:
+            hdu = fits.open(im)
+            sci, err = hdu['SCI'].data, hdu['ERR'].data
+            sci_con = convolve_fft(sci, psf_kernel, normalize_kernel=True)
+            err_con = convolve_fft(err, psf_kernel, normalize_kernel=True)
+            sci_header = hdu['SCI'].header
+            sci_header['filter'] = filt.upper()
+
+            hdu['SCI'].header, hdu['SCI'].data = sci_header, sci_con
+            hdu['ERR'].data = err_con
+            hdu.writeto(im, overwrite=True)
 
 def create_ccddata(file):
     hdu = fits.open(file)
@@ -331,7 +327,7 @@ def coadd(ref_files, filt, filename = 'coadd_i2d.fits'):
     
     exptime_wt = [np.nanmean(i) for i in combiner_weights]
     for key in list(hdr_update.keys()):
-        hdr_update[key] = np.average(hdr_update[key], weights = exptime_wt)
+        hdr_update[key] = np.sum(hdr_update[key])
         primary_header[key] = hdr_update[key]
 
     sci_header['PHOTMJSR'] = update_photmjsr(ccddata_, phots)
@@ -347,6 +343,20 @@ def coadd(ref_files, filt, filename = 'coadd_i2d.fits'):
     coadd_hdul.writeto(filename, overwrite = True)
     hdu_template.close()
 
+def copy_files(filter_table, outdir):
+    infiles = np.hstack([filter_table[i]['image'].value for i in filter_table.keys()])
+    for file in infiles:
+        shutil.copy(file, outdir)
+
+def update_path(filter_table, outdir):
+    for flt in filter_table.keys():
+        tbl = filter_table[flt]
+        filenames = [os.path.basename(i['image']) for i in tbl]
+        tbl['image'] = [os.path.join(outdir, i) for i in filenames]
+        filter_table[flt] = tbl
+    
+    return filter_table
+
 if __name__ == '__main__':
     parser = create_parser()
     args = parser.parse_args()
@@ -360,21 +370,25 @@ if __name__ == '__main__':
     filter_table = create_filter_table(table, filters)
     filter_table = {k: v for k, v in filter_table.items() 
                     if k in filt}
-    filter_keys = sorted(filter_table.keys())[::-1]
+    filter_keys = sorted(filter_table.keys())
+    target_filter = filter_keys[-1]
     
-    centroid, output_shape = find_centroid(filter_table)
-    mosaics = []
-    #create mosaic for the broadest filter
-    filter_key = filter_keys[0]
-    driz_image = create_coadd_mosaic(filter_table[filter_key], outdir=base_dir, filt=filter_key, 
-                                     centroid=centroid, output_shape=output_shape, gwcs_file=None)
-    mosaics.append(driz_image)
+    outdir = os.path.join(os.path.join(Path(base_dir).parent, 'reference'))
+    copy_files(filter_table, outdir)
+    filter_table = update_path(filter_table, outdir)
+    base_dir = outdir
     
-    #save gwcs file
-    sci_hdr = fits.open(driz_image)['SCI'].header
-    gwcs_path = create_gwcs(sci_header=sci_hdr, outdir=base_dir)
+    wcs_out, shape_out = find_optimal_wcs(filter_table)
+    gwcs_path = create_gwcs(wcs_out=wcs_out, shape_out=shape_out, outdir=base_dir)
 
+    convolve_images(filter_table, target_filter)
+
+    mosaics = []
     for flt_key in filter_keys:
         driz_image = create_coadd_mosaic(filter_table[flt_key], outdir=base_dir, filt=flt_key, 
                                         centroid=None, output_shape=None, gwcs_file=gwcs_path)
         mosaics.append(driz_image)
+    mosaics = [os.path.join(base_dir, i) for i in mosaics]
+
+    coadd_filename = os.path.join(base_dir, 'coadd_i2d.fits')
+    coadd(mosaics, target_filter, coadd_filename)

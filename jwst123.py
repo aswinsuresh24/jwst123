@@ -870,10 +870,13 @@ def create_dirs(work_dir, obj):
     '''
     outdir = os.path.join(work_dir, obj, 'nircam')
     aligndir = os.path.join(work_dir, 'align')
+    refdir = os.path.join(work_dir, 'reference')
     if not os.path.exists(outdir):
         os.makedirs(outdir)
     if not os.path.exists(aligndir):
         os.makedirs(aligndir)
+    if not os.path.exists(refdir):
+        os.makedirs(refdir)
     return outdir
 
 if __name__ == '__main__':
