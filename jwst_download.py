@@ -91,6 +91,8 @@ def query_mast_jwst(coord):
 
         productmask = [all(l) for l in list(map(list, zip(*productmasks)))]
         productList = productList[productmask]
+        if len(productList) == 0:
+            continue
         os.makedirs(f'jwst_data/{obj}/{filt}_{obsid}', exist_ok=True)
         download_dir = f'jwst_data/{obj}/{filt}_{obsid}'
         Observations.download_products(productList, download_dir=download_dir, extension='fits')

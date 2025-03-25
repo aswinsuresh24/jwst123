@@ -1,8 +1,8 @@
 #DOLPHOT params
-base_params = {'FitSky' : '1',
+base_params = {'FitSky' : '2',
                 'SigPSF' : '5.0',
                 'FlagMask' : '4',
-                'SecondPass' : '1',
+                'SecondPass' : '5',
                 'PSFPhotIt' : '2',
                 'ApCor' : '1',
                 'FSat' : '0.999',
@@ -18,7 +18,8 @@ base_params = {'FitSky' : '1',
                 'SkipSky' : '1',
                 'UseWCS' : '2',
                 'PSFres' : '1',
-                'PosStep' : '0.25'}
+                'PosStep' : '0.25',
+                'NIRCAMvega' : '0'}
 
 short_params = {'shift' : '0 0',
                 'xform' :'1 0 0',

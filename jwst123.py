@@ -463,7 +463,7 @@ def calc_sky(files):
                             step=step,sigma_low=sigma_low,sigma_high=sigma_high)
         subprocess.run(cmd_fl,shell=True)
 
-def generate_dolphot_paramfile(basedir):
+def generate_dolphot_paramfile(basedir, files = None):
     '''
     Generate the dolphot parameter file
 
@@ -471,6 +471,8 @@ def generate_dolphot_paramfile(basedir):
     ----------
     basedir : str
         Base directory to search for files
+    files : list
+        List of files to be included in the paramfile
 
     Returns
     -------
@@ -481,25 +483,28 @@ def generate_dolphot_paramfile(basedir):
         raise ValueError('More than one i2d image found')
     
     ref_image = ref_image[0]
-    # phot_images = glob.glob(basedir + '/*cal.fits')
-    phot_images = glob.glob(basedir + '/*jhat.fits')
+    if files:
+        phot_images = files
+    else:
+        phot_images = glob.glob(basedir + '/*jhat.fits')
     phot_image_base = [os.path.basename(r).replace('.fits', '') for r in phot_images]
     phot_image_det = ['long' if 'long' in get_detector_chip(r) else 'short' for r in phot_images]
     N_img = len(phot_images)
-    #dolphot can only process 99 images at a time
-    #write the multiple param files in chunks of 99 images
+    #dolphot can only process n images at a time
+    #write the multiple param files in chunks of n images
     #with the same reference image
     paramfiles = []
-    if N_img > 98:
-        N_chunks = int(N_img/98) + 1
+    NMAX = 148
+    if N_img > NMAX:
+        N_chunks = int(N_img/NMAX) + 1
         for i in range(N_chunks):
             paramfiles.append(f'dolphot_{i}.param')
-            n_file = 98 if i < N_chunks - 1 else N_img - i*98
+            n_file = NMAX if i < N_chunks - 1 else N_img - i*NMAX
             with open(f'{basedir}/dolphot_{i}.param', 'w') as f:
                 f.write('Nimg = {}\n'.format(n_file))
                 f.write('img0_file = {}\n'.format(os.path.basename(ref_image).replace('.fits', '')))
 
-                for j, (img, det) in enumerate(zip(phot_image_base[i*98:(i+1)*98], phot_image_det[i*98:(i+1)*98])):
+                for j, (img, det) in enumerate(zip(phot_image_base[i*NMAX:(i+1)*NMAX], phot_image_det[i*NMAX:(i+1)*NMAX])):
                     f.write('img{}_file = {}\n'.format(j+1, img))
                     if det == 'short':
                         for key, val in short_params.items():

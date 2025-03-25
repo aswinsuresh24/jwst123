@@ -323,7 +323,7 @@ def coadd(ref_files, filt, filename = 'coadd_i2d.fits'):
     primary_header, sci_header = hdu_template['PRIMARY'].header, hdu_template['SCI'].header
     err_header, wht_header = hdu_template['ERR'].header, hdu_template['WHT'].header
     primary_header['FILENAME'] = filename
-    primary_header['FILTER'] = filt
+    primary_header['FILTER'] = filt.upper()
     
     exptime_wt = [np.nanmean(i) for i in combiner_weights]
     for key in list(hdr_update.keys()):
