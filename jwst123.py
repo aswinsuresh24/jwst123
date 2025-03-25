@@ -148,7 +148,7 @@ def pick_deepest_image(table):
     deepest_image = table[exptimes.index(max(exptimes))]
     return deepest_image
 
-def add_alignment_groups(table, shapely=False):
+def add_alignment_groups(table, use_shapely=False):
     '''
     Add alignment groups to the table calculated from the image
     polygon overlap area
@@ -157,7 +157,7 @@ def add_alignment_groups(table, shapely=False):
     ----------
     table : astropy.table.Table
         Input list table
-    shapely: Bool
+    use_shapely: Bool
         find alignment groups using spatially distinct shapely
         geometries - fails in certain dither patterns
 
@@ -179,7 +179,7 @@ def add_alignment_groups(table, shapely=False):
     guide_star_id, pgons = np.array(guide_star_id), np.array(pgons)
     table.add_column(Column(name='gdstar', data=guide_star_id))
     table.add_column(Column(name='ref_img', data=[None]*len(table)))
-    if shapely:
+    if use_shapely:
         for gdstar in np.unique(guide_star_id):
             align_groups = np.array([])
             gdstar_mask = guide_star_id == gdstar
@@ -906,12 +906,8 @@ if __name__ == '__main__':
         mosaic_photfile = fix_phot(mosaic_name)
         print(f'Mosaic photfile: {mosaic_photfile}')
         for filt, tbl in filter_table.items():
-            if filt == 'f277w':
-                gaia_offset = (0, 0)
-            else:
-                gaia_offset = (0, 0)
             align_to_mosaic(mosaic_photfile, [r['image'] for r in tbl], os.path.join(work_dir, 'jhat'), 
-                            gaia_offset = gaia_offset, verbose = False)
+                            gaia_offset = (0,0), verbose = False)
         aligned_images = glob.glob(os.path.join(work_dir, 'jhat', f'*nrc*jhat.fits'))
         align_list = input_list(aligned_images)
         refname = generate_level3_mosaic(align_list[align_list['filter'] == 'f150w']['image'],
