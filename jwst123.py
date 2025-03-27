@@ -44,7 +44,7 @@ from common import Constants
 from common import Options
 from common import Settings
 from common import Util
-from nircam_setttings import base_params, short_params, long_params
+from nircam_setttings import *
 from nbutils import get_filter, get_instrument, get_chip, get_filter, input_list, xmatch_common
 from nbutils import get_zpt, add_visit_info, organize_reduction_tables, pick_deepest_images, create_filter_table
 
@@ -691,32 +691,28 @@ def align_to_gaia(align_image, outdir, xshift = 0, yshift = 0, verbose = False):
     '''
     wcs_align = st_wcs_align()
     print(f'Aligning {os.path.basename(align_image)} to Gaia')
-    wcs_align.run_all(align_image,
-          telescope='jwst',
-          outsubdir=outdir,
-          overwrite=True,
-          d2d_max=2.0,
-          find_stars_threshold = 3,
-          showplots=0,
-          refcatname='Gaia',
-          refcat_pmflag = True, #reject proper motion stars
-          histocut_order='dxdy',
-          use_dq = False,
-          verbose = verbose,
-          iterate_with_xyshifts = True,
-          xshift = xshift,
-          yshift = yshift,
-          sharpness_lim=(0.3,0.95),
-          roundness1_lim=(-0.7, 0.7),
-        #   Nbright = 1500,
-          SNR_min= 5,
-          dmag_max=.1,
-          objmag_lim =(15,22),
-        #   refmag_lim = (12,19),
-          binsize_px = 1.0,
-          saveplots = 0,
-          slope_min = -20/2048,
-          savephottable = 0)
+    try:
+        wcs_align.run_all(align_image,
+            outsubdir=outdir,
+            refcatname='Gaia',
+            refcat_pmflag = True, #reject proper motion stars
+            use_dq = False,
+            verbose = verbose,
+            xshift = xshift,
+            yshift = yshift,
+            #   Nbright = 1500,
+            #   refmag_lim = (12,19),
+            **strict_gaia_params)
+    except: #relaxed cuts
+        wcs_align.run_all(align_image,
+            outsubdir=outdir,
+            refcatname='Gaia',
+            refcat_pmflag = True, #reject proper motion stars
+            use_dq = False,
+            verbose = verbose,
+            xshift = xshift,
+            yshift = yshift,
+            **relaxed_gaia_params)
     
     if 'cal.fits' in align_image:
         jhat_image = os.path.join(outdir, os.path.basename(align_image.replace('cal.fits', 'jhat.fits')))
@@ -767,43 +763,36 @@ def align_to_jwst(align_image, photfilename, outdir, xshift = 0, yshift = 0, Nbr
     '''
     wcs_align = st_wcs_align()
     print(f'Aligning {os.path.basename(align_image)} to JWST')
-    wcs_align.run_all(align_image,
-                      telescope='jwst',
-                      outsubdir=outdir,
-                      refcat_racol='ra',
-                      refcat_deccol='dec',
-                      refcat_magcol='mag',
-                      refcat_magerrcol='dmag',
-                      overwrite=True,
-                      d2d_max=1.0,
-                      showplots=0,
-                      find_stars_threshold=5,
-                      refcatname=photfilename,
-                      verbose = verbose,
-                      iterate_with_xyshifts = True,
-                      histocut_order='dxdy',
-                      sharpness_lim=(0.3,0.95),
-                      roundness1_lim=(-0.7, 0.7),
-                      xshift = xshift,
-                      yshift = yshift,
-                      SNR_min= 5,
-                      dmag_max=0.1,
-                      Nbright=Nbright,
-                      objmag_lim =(15,22),
-                      slope_min = -20/2048,
-                      binsize_px = 1.0,
-                      savephottable=0)
+    try:
+        wcs_align.run_all(align_image,
+                        outsubdir=outdir,
+                        refcatname=photfilename,
+                        verbose = verbose,
+                        xshift = xshift,
+                        yshift = yshift,
+                        Nbright=Nbright,
+                        **relaxed_jwst_params)   
+
+    except: #relaxed cuts
+        wcs_align.run_all(align_image,
+                        outsubdir=outdir,
+                        refcatname=photfilename,
+                        verbose = verbose,
+                        xshift = xshift,
+                        yshift = yshift,
+                        Nbright=Nbright,
+                        **strict_jwst_params)       
     
     jhat_image = os.path.join(outdir, os.path.basename(align_image.replace('cal.fits', 'jhat.fits')))
     #compute dispersion
     # gaia_table = query_gaia(align_image, save_file = None)
-    refcat = Table.read(photfilename, format='ascii')
-    dispersion_initial = calc_dispersion(refcat, jhat_image.replace('_jhat.fits', '.phot.txt'), dist_limit = 1, plot = False)
+    refcat_in = Table.read(photfilename, format='ascii')
+    dispersion_initial = calc_dispersion(refcat_in, jhat_image.replace('_jhat.fits', '.phot.txt'), dist_limit = 1, plot = False)
     print(f'Initial dispersion: {dispersion_initial}"')
     temp_cal_name = jhat_image.replace('jhat.fits', 'jhat_cal.fits')
     os.rename(jhat_image, temp_cal_name)
     refcat, photfilename = jwst_phot(jhat_image.replace('jhat.fits', 'jhat_cal.fits'))
-    dispersion_final = calc_dispersion(refcat, photfilename, dist_limit = 1, plot = False)
+    dispersion_final = calc_dispersion(refcat_in, photfilename, dist_limit = 1, plot = False)
     print(f'Final dispersion: {dispersion_final}"')
     os.rename(temp_cal_name, jhat_image)
 
