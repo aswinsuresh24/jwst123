@@ -771,7 +771,7 @@ def align_to_jwst(align_image, photfilename, outdir, xshift = 0, yshift = 0, Nbr
                         xshift = xshift,
                         yshift = yshift,
                         Nbright=Nbright,
-                        **relaxed_jwst_params)   
+                        **strict_jwst_params)   
 
     except: #relaxed cuts
         wcs_align.run_all(align_image,
@@ -781,7 +781,7 @@ def align_to_jwst(align_image, photfilename, outdir, xshift = 0, yshift = 0, Nbr
                         xshift = xshift,
                         yshift = yshift,
                         Nbright=Nbright,
-                        **strict_jwst_params)       
+                        **relaxed_jwst_params)       
     
     jhat_image = os.path.join(outdir, os.path.basename(align_image.replace('cal.fits', 'jhat.fits')))
     #compute dispersion

@@ -16,7 +16,7 @@ def create_parser():
                         help='Full path to directory containing the raw directory, in which symlinks will be created', 
                         required=True)
     parser.add_argument('--proc_dirs', nargs = '*', type=str, help='List of directories that have processed files', 
-                        default = [], required=True)
+                        default = [], required=False)
     return parser
 
 def create_symlink(src, dst):

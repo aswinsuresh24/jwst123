@@ -43,7 +43,10 @@ def create_parser():
     '''
     parser = argparse.ArgumentParser(description='Reduce JWST data')
     parser.add_argument('--basedir', type=str, default='.', help='Root directory to search for data')
-    # parser.add_argument('--filter', type=str, help='Filter to create mosaic of')
+    parser.add_argument('--outname', type=str, default='coadd_i2d.fits', help='Filename of the coadded image')
+    parser.add_argument('--filter', nargs = '*', type=str,
+                         help='List of filters to be combined, in order of increasing wavelength',
+                         required = True)
     return parser
 
 def create_default_mosaic(inputfiles, outdir, filt):
@@ -361,11 +364,23 @@ if __name__ == '__main__':
     parser = create_parser()
     args = parser.parse_args()
     base_dir = args.basedir
-    # filt = args.filter
-    filt = ['f115w', 'f150w', 'f200w']
-
+    outname = args.outname
+    filt = args.filter
+    
     inputfiles = glob.glob(os.path.join(base_dir, '*jhat.fits'))
     table = input_list(inputfiles)
+
+    #line split for images
+    pgons = []
+    for im in table['image']:
+        region = fits.open(im)['SCI'].header['S_REGION']
+        coords = np.array(region.split('POLYGON ICRS  ')[1].split(' '), dtype = float)
+        pgons.append(shapely.Polygon(coords.reshape(4, 2)).centroid)
+    ra = [i.x for i in pgons]
+    dec = [i.y for i in pgons]
+    mask = np.array(dec) < -37.65
+    table = table[mask]
+
     filters = np.unique(table['filter']).value
     filter_table = create_filter_table(table, filters)
     filter_table = {k: v for k, v in filter_table.items() 
@@ -390,5 +405,5 @@ if __name__ == '__main__':
         mosaics.append(driz_image)
     mosaics = [os.path.join(base_dir, i) for i in mosaics]
 
-    coadd_filename = os.path.join(base_dir, 'coadd_i2d.fits')
+    coadd_filename = os.path.join(base_dir, outname)
     coadd(mosaics, target_filter, coadd_filename)
