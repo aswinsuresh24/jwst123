@@ -49,6 +49,141 @@ def create_parser():
                          required = True)
     return parser
 
+class split_observations(object):
+    def __init__(self, table, polygons=None, N_max=150):
+
+        self.table = table
+
+        if polygons is None:
+            _, self.pgons, self.centroids = self.get_pgons(table)
+        else:
+            self.pgons = np.array(polygons)
+            self.centroids = np.array([i.centroid for i in polygons])
+
+        self.N_max = N_max
+        self.split_boxes = []
+        self.physical_split = True
+        self.check_box = None
+
+    def get_pgons(self, table):
+        image_hdus = [fits.open(i)[1] for i in table['image']]
+        wcs_out, shape_out = find_optimal_celestial_wcs(image_hdus, auto_rotate = True)
+
+        wcs_header = wcs_out.to_header()
+        wcs_header['NAXIS1'] = shape_out[1]
+        wcs_header['NAXIS2'] = shape_out[0]
+        wcs_opt = wcs.WCS(wcs_header)
+        
+        pgons, centroids = [], []
+        for im in table['image']:
+            region = fits.open(im)['SCI'].header['S_REGION']
+            coords = np.array(region.split('POLYGON ICRS  ')[1].split(' '), dtype = float)
+            coords = coords.reshape(4, 2)
+            x, y = wcs_opt.all_world2pix(coords[:, 0], coords[:, 1], 1)
+            xy_coords = np.column_stack((x, y))
+            pgons.append(shapely.Polygon(xy_coords))
+            centroids.append(shapely.Polygon(xy_coords).centroid)
+
+        pgons, centroids = np.array(pgons), np.array(centroids)
+
+        return wcs_opt, pgons, centroids
+    
+    def line_split(self, bounds, xs, ys, split_size=150, split_by='x', physical=False):
+        lstrings = []
+        
+        if split_by == 'x':
+            if physical:
+                i = (bounds[0]+bounds[2])/2
+                lstrings.append(shapely.LineString([[i, bounds[1]], [i, bounds[3]]]))
+            else:
+                cst = np.argsort(xs)
+                xs, ys = np.array(xs)[cst], np.array(ys)[cst]
+                split_lines = xs[0::split_size][1:]
+                for i in split_lines:
+                    lstrings.append(shapely.LineString([[i, bounds[1]], [i, bounds[3]]]))
+
+        elif split_by == 'y':
+            if physical:
+                i = (bounds[1]+bounds[3])/2
+                lstrings.append(shapely.LineString([[bounds[0], i], [bounds[2], i]]))
+            else:
+                cst = np.argsort(ys)
+                xs, ys = np.array(xs)[cst], np.array(ys)[cst]
+                split_lines = ys[0::split_size][1:]
+                for i in split_lines:
+                    lstrings.append(shapely.LineString([[bounds[0], i], [bounds[2], i]]))
+
+        else:
+            raise ValueError("Must be split by x or y")
+        
+        lstrings = shapely.MultiLineString(lstrings)
+
+        return lstrings
+    
+    def find_intersections(self, bbox=None, min_overlap=0.2):
+
+        if bbox is None:
+            bbox = self.split_boxes
+
+        int_area = np.array([bbox.intersection(p).area/p.area for p in self.pgons])
+        mask = int_area > min_overlap
+        print(mask.sum())
+        return mask
+    
+    def get_bbox(self, pgons=None):
+        
+        if pgons is None:
+            pgons = self.pgons
+
+        bounds = shapely.unary_union(pgons).bounds
+        bbox_coords = [[bounds[0], bounds[1]], [bounds[0], bounds[3]], [bounds[2], bounds[3]], [bounds[2], bounds[1]]]
+        bbox = shapely.Polygon(bbox_coords)
+
+        return bbox
+    
+    def boxsplit(self, bbox=None, split_n=None):
+
+        self.check_box = bbox
+
+        if bbox is None:
+            bbox = self.get_bbox(self.pgons)
+
+        mask = self.find_intersections(bbox)
+        if mask.sum() < self.N_max:
+            self.split_boxes.append(bbox)
+            return None
+
+        else:
+            spl_pgons, spl_centroids  = self.pgons[mask], self.centroids[mask]
+            bounds = bbox.bounds
+            width, height = bounds[3] - bounds[1], bounds[2] - bounds[0]
+            split_by = 'x' if height > width else 'y'
+            if split_n is None:
+                split_n = len(spl_pgons)//2 + 1
+
+            xs = [i.x for i in spl_centroids]
+            ys = [i.y for i in spl_centroids]
+            lstrings = self.line_split(bounds, xs, ys, split_size=split_n, split_by=split_by, physical=self.physical_split)
+            
+            split_bbox = []
+            for ln in lstrings.geoms:
+                linesplit = shapely.ops.split(bbox, ln)
+                if len(linesplit.geoms) > 1:
+                    split_bbox.append(linesplit.geoms[0])
+                    bbox = linesplit.geoms[1]
+                else:
+                    bbox = linesplit.geoms[0]
+            split_bbox.append(bbox)
+
+            for box_ in split_bbox:
+                if self.check_box == box_:
+                    print(f"WARNING: Cannot split further, minmimum group size is {mask.sum()}")
+                    self.split_boxes.append(box_)
+                    continue
+                _ = self.boxsplit(box_)
+            
+            return None
+        
 def create_default_mosaic(inputfiles, outdir, filt):
     '''
     Create level3 drizzled mosaic from level2 input files
