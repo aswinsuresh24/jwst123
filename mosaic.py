@@ -9,6 +9,7 @@ from astropy.io import fits
 from jwst.associations import asn_from_list
 from jwst.associations.lib.rules_level3_base import DMS_Level3_Base
 import shapely
+import shapely.ops
 import matplotlib.pyplot as plt
 import shutil
 from pathlib import Path
@@ -16,6 +17,7 @@ from pathlib import Path
 from astropy.modeling import models
 from astropy import coordinates as coord
 from astropy import units as u
+from astropy.table import Column
 from gwcs import coordinate_frames as cf
 from astropy import wcs
 from gwcs import WCS as g_wcs
@@ -43,25 +45,27 @@ def create_parser():
     '''
     parser = argparse.ArgumentParser(description='Reduce JWST data')
     parser.add_argument('--basedir', type=str, default='.', help='Root directory to search for data')
-    parser.add_argument('--outname', type=str, default='coadd_i2d.fits', help='Filename of the coadded image')
     parser.add_argument('--filter', nargs = '*', type=str,
                          help='List of filters to be combined, in order of increasing wavelength',
                          required = True)
     return parser
 
 class split_observations(object):
-    def __init__(self, table, polygons=None, N_max=150):
+    def __init__(self, table, N_max=150, polygons=None, wcs_opt=None):
 
         self.table = table
+        self.N_max = N_max
 
         if polygons is None:
-            _, self.pgons, self.centroids = self.get_pgons(table)
+            self.wcs, self.pgons, self.centroids = self.get_pgons(table)
         else:
             self.pgons = np.array(polygons)
+            self.wcs = wcs_opt
             self.centroids = np.array([i.centroid for i in polygons])
 
-        self.N_max = N_max
         self.split_boxes = []
+        self.subtables = []
+        self.reftables = []
         self.physical_split = True
         self.check_box = None
 
@@ -151,6 +155,8 @@ class split_observations(object):
         mask = self.find_intersections(bbox)
         if mask.sum() < self.N_max:
             self.split_boxes.append(bbox)
+            self.subtables.append(self.table[mask])
+            self.reftables.append(self.table[self.find_intersections(bbox, min_overlap=0.0)])
             return None
 
         else:
@@ -179,10 +185,35 @@ class split_observations(object):
                 if self.check_box == box_:
                     print(f"WARNING: Cannot split further, minmimum group size is {mask.sum()}")
                     self.split_boxes.append(box_)
+                    self.subtables.append(self.table[mask])
+                    self.reftables.append(self.table[self.find_intersections(box_, min_overlap=0.0)])
                     continue
                 _ = self.boxsplit(box_)
             
             return None
+        
+def get_pgons(table):
+    image_hdus = [fits.open(i)[1] for i in table['image']]
+    wcs_out, shape_out = find_optimal_celestial_wcs(image_hdus, auto_rotate = True)
+
+    wcs_header = wcs_out.to_header()
+    wcs_header['NAXIS1'] = shape_out[1]
+    wcs_header['NAXIS2'] = shape_out[0]
+    wcs_opt = wcs.WCS(wcs_header)
+    
+    pgons, centroids = [], []
+    for im in table['image']:
+        region = fits.open(im)['SCI'].header['S_REGION']
+        coords = np.array(region.split('POLYGON ICRS  ')[1].split(' '), dtype = float)
+        coords = coords.reshape(4, 2)
+        x, y = wcs_opt.all_world2pix(coords[:, 0], coords[:, 1], 1)
+        xy_coords = np.column_stack((x, y))
+        pgons.append(shapely.Polygon(xy_coords))
+        centroids.append(shapely.Polygon(xy_coords).centroid)
+
+    pgons, centroids = np.array(pgons), np.array(centroids)
+
+    return wcs_opt, pgons, centroids
         
 def create_default_mosaic(inputfiles, outdir, filt):
     '''
@@ -297,11 +328,11 @@ def create_coadd_mosaic(table, outdir, filt, centroid=None,
 
     image3.run(nircam_asn_file)
     
-    filepath = f'out_{filt}/{filt}_i2d.fits'
+    filepath = f'{outdir}/out_{filt}/{filt}_i2d.fits'
     return filepath
 
 
-def create_gwcs(wcs_out, shape_out, outdir):
+def create_gwcs(outdir, sci_header=None, wcs_out=None, shape_out=None):
     '''
     Convert astropy WCS to a GWCS object and write it into an asdf file
 
@@ -317,9 +348,15 @@ def create_gwcs(wcs_out, shape_out, outdir):
     gwcs_path: str
         Path to the GWCS asdf file
     '''
-    sci_header = wcs_out.to_header()
-    sci_header['NAXIS1'] = shape_out[1]
-    sci_header['NAXIS2'] = shape_out[0]
+
+    if sci_header:
+        pass
+    elif wcs_out:
+        sci_header = wcs_out.to_header()
+        sci_header['NAXIS1'] = shape_out[1]
+        sci_header['NAXIS2'] = shape_out[0]
+    else:
+        raise ValueError("Please provide header or wcs object")
 
     shift_by_crpix = models.Shift(-(sci_header['CRPIX1'] - 1)) & models.Shift(-(sci_header['CRPIX2'] - 1))
     matrix = np.array([[sci_header['PC1_1'], sci_header['PC1_2']],
@@ -481,6 +518,16 @@ def coadd(ref_files, filt, filename = 'coadd_i2d.fits'):
     coadd_hdul.writeto(filename, overwrite = True)
     hdu_template.close()
 
+def create_dirs(base_dir, n=1):
+    out_dict = dict.fromkeys(range(n))
+    for i in range(n):
+        outdir = os.path.join(base_dir, f'reference/group_{i}')
+        out_dict[i] = outdir
+        if not os.path.exists(outdir):
+            os.makedirs(outdir)
+    
+    return out_dict
+
 def copy_files(filter_table, outdir):
     infiles = np.hstack([filter_table[i]['image'].value for i in filter_table.keys()])
     for file in infiles:
@@ -495,50 +542,75 @@ def update_path(filter_table, outdir):
     
     return filter_table
 
+def setup_paramfile(refimage, images):
+    pass
+
 if __name__ == '__main__':
     parser = create_parser()
     args = parser.parse_args()
     base_dir = args.basedir
-    outname = args.outname
     filt = args.filter
     
-    inputfiles = glob.glob(os.path.join(base_dir, '*jhat.fits'))
+    inputfiles = glob.glob(os.path.join(base_dir, 'jhat', '*jhat.fits'))
     table = input_list(inputfiles)
 
-    #line split for images
-    pgons = []
-    for im in table['image']:
-        region = fits.open(im)['SCI'].header['S_REGION']
-        coords = np.array(region.split('POLYGON ICRS  ')[1].split(' '), dtype = float)
-        pgons.append(shapely.Polygon(coords.reshape(4, 2)).centroid)
-    ra = [i.x for i in pgons]
-    dec = [i.y for i in pgons]
-    mask = np.array(dec) < -37.65
-    table = table[mask]
+    table.add_column(Column(name='group', data=[None]*len(table)))
+    wcs_opt, pgons, centroids = get_pgons(table)
 
-    filters = np.unique(table['filter']).value
-    filter_table = create_filter_table(table, filters)
-    filter_table = {k: v for k, v in filter_table.items() 
-                    if k in filt}
-    filter_keys = sorted(filter_table.keys())
-    target_filter = filter_keys[-1]
-    
-    outdir = os.path.join(os.path.join(Path(base_dir).parent, 'reference'))
-    copy_files(filter_table, outdir)
-    filter_table = update_path(filter_table, outdir)
-    base_dir = outdir
-    
-    wcs_out, shape_out = find_optimal_wcs(filter_table)
-    gwcs_path = create_gwcs(wcs_out=wcs_out, shape_out=shape_out, outdir=base_dir)
+    net_field = shapely.unary_union(pgons)
+    if type(net_field) == shapely.geometry.polygon.Polygon:
+        net_field = shapely.MultiPolygon([net_field])
 
-    convolve_images(filter_table, target_filter)
+    for i, gm_ in enumerate(net_field.geoms):
+        int_area = np.array([i.intersection(gm_).area/i.area for i in pgons])
+        mask = int_area > 0
+        table['group'][mask] = i
 
-    mosaics = []
-    for flt_key in filter_keys:
-        driz_image = create_coadd_mosaic(filter_table[flt_key], outdir=base_dir, filt=flt_key, 
-                                        centroid=None, output_shape=None, gwcs_file=gwcs_path)
-        mosaics.append(driz_image)
-    mosaics = [os.path.join(base_dir, i) for i in mosaics]
+    ngroups = np.unique(table['group'])
+    out_dict = create_dirs(base_dir, len(ngroups))
 
-    coadd_filename = os.path.join(base_dir, outname)
-    coadd(mosaics, target_filter, coadd_filename)
+    for grp in ngroups:
+        tbl_ = table[table['group'] == grp]
+        outdir = out_dict[grp]
+        split_obs = split_observations(table = tbl_)
+        split_obs.boxsplit()
+        wcs_ = split_obs.wcs
+
+        for b in range(len(split_obs.split_boxes)):
+            subtable, reftable = split_obs.subtables[b], split_obs.reftables[b]
+
+            box_outdir = os.path.join(outdir, f'ref_{b}')
+            if not os.path.exists(box_outdir):
+                os.makedirs(box_outdir)
+
+            bbox = split_obs.split_boxes[b]
+            minx, maxx = int(np.abs(np.floor(min(bbox.exterior.xy[0])))), int(np.abs(np.ceil(max(bbox.exterior.xy[0]))))
+            miny, maxy = int(np.abs(np.floor(min(bbox.exterior.xy[1])))), int(np.abs(np.ceil(max(bbox.exterior.xy[1]))))
+            wcs_slice = (slice(miny, maxy), slice(minx, maxx))
+            box_wcs = wcs_.slice(wcs_slice)
+            wcs_hdr = box_wcs.to_header()
+            wcs_hdr['NAXIS1'], wcs_hdr['NAXIS2'] = box_wcs._naxis[0], box_wcs._naxis[1]
+            gwcs_path = create_gwcs(outdir=box_outdir, sci_header=wcs_hdr)
+
+            filters = np.unique(reftable['filter']).value
+            filter_table = create_filter_table(reftable, filters)
+            filter_table = {k: v for k, v in filter_table.items() 
+                            if k in filt}
+            filter_keys = sorted(filter_table.keys())
+            target_filter = filter_keys[-1]
+
+            copy_files(filter_table, box_outdir)
+            filter_table = update_path(filter_table, box_outdir)
+
+            convolve_images(filter_table, target_filter)
+
+            mosaics = []
+            for flt_key in filter_keys:
+                driz_image = create_coadd_mosaic(filter_table[flt_key], outdir=box_outdir, filt=flt_key, 
+                                                centroid=None, output_shape=None, gwcs_file=gwcs_path)
+                mosaics.append(driz_image)
+
+            coadd_filename = os.path.join(box_outdir, f'coadd_{grp}_{b}_{target_filter}_i2d.fits')
+            coadd(mosaics, target_filter, coadd_filename)
+
+            setup_paramfile(coadd_filename, subtable)
