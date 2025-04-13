@@ -8,6 +8,7 @@ raw/
 *red*/
 *temp*/
 launch.sh
+*.sh
 *.fits
 *.coo
 *.log

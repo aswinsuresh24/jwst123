@@ -49,6 +49,7 @@ def create_parser():
     parser = argparse.ArgumentParser(description='Reduce JWST data')
     parser.add_argument('--basedir', type=str, default='.', help='Root directory to search for data')
     parser.add_argument('--object', type=str, default='dolphot', help='Object to reduce')
+    parser.add_argument('--nmax', type=int, default=150, help='Maximum number of images in a dolphot run')
     parser.add_argument('--filter', nargs = '*', type=str,
                          help='List of filters to be combined, in order of increasing wavelength',
                          required = True)
@@ -638,6 +639,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
     base_dir = args.basedir
     obj = args.object
+    nmax = args.nmax
     filt = args.filter
     
     dolphot_dir = os.path.join(base_dir, obj)
@@ -662,7 +664,7 @@ if __name__ == '__main__':
     for grp in ngroups:
         tbl_ = table[table['group'] == grp]
         outdir = out_dict[grp]
-        split_obs = split_observations(table = tbl_)
+        split_obs = split_observations(table = tbl_, N_max = nmax)
         split_obs.boxsplit()
         wcs_ = split_obs.wcs
 
