@@ -45,7 +45,7 @@ from common import Options
 from common import Settings
 from common import Util
 from nircam_setttings import *
-from nbutils import get_filter, get_instrument, get_chip, get_filter, input_list, xmatch_common
+from nbutils import get_filter, get_instrument, get_chip, get_filter, input_list, xmatch_common, get_detector_chip
 from nbutils import get_zpt, add_visit_info, organize_reduction_tables, pick_deepest_images, create_filter_table
 
 @contextmanager
@@ -108,27 +108,6 @@ def get_input_images(pattern=None, workdir=None):
         pattern = ['*nrca*_cal.fits','*nrcb*_cal.fits']
     return([s for p in pattern for s in glob.glob(os.path.join(workdir,'raw',p))])
 
-def get_detector_chip(filename):
-    '''
-    Get the detector chip from the file name
-
-    Parameters
-    ----------
-    filename : str
-        File name
-
-    Returns
-    -------
-    detector_chip : str
-        Detector chip
-    '''
-    fl_split = filename.split('_')
-    mask = ['nrc' in x for x in fl_split]
-    if any(mask):
-        idx = mask.index(True)
-        return fl_split[idx]
-    
-    return None
 
 def pick_deepest_image(table):
     '''
@@ -411,10 +390,10 @@ def create_alignment_mosaic(filter_table, outdir, work_dir, infilter=None):
     jh_image = os.path.join(outdir, os.path.basename(mosaic_name).replace('i2d.fits', 'jhat.fits'))
     shutil.move(jh_image, jh_image.replace('jhat.fits', 'jhat_i2d.fits'))
     aligned_mosaic = jh_image.replace('jhat.fits', 'jhat_i2d.fits')
-    shutil.move(aligned_mosaic, work_dir)
+    # shutil.move(aligned_mosaic, work_dir)
     print(f'Dispersion for {aligned_mosaic}: {dispersion}"')
 
-    return os.path.join(work_dir, os.path.basename(aligned_mosaic))
+    return aligned_mosaic
 
 def apply_nircammask(files):
     '''
@@ -862,7 +841,7 @@ def create_dirs(work_dir, obj):
     outdir : str
         Output directory
     '''
-    outdir = os.path.join(work_dir, obj, 'nircam')
+    outdir = os.path.join(work_dir, obj)
     aligndir = os.path.join(work_dir, 'align')
     refdir = os.path.join(work_dir, 'reference')
     if not os.path.exists(outdir):
@@ -898,25 +877,4 @@ if __name__ == '__main__':
             align_to_mosaic(mosaic_photfile, [r['image'] for r in tbl], os.path.join(work_dir, 'jhat'), 
                             gaia_offset = (0,0), verbose = False)
         aligned_images = glob.glob(os.path.join(work_dir, 'jhat', f'*nrc*jhat.fits'))
-        align_list = input_list(aligned_images)
-        refname = generate_level3_mosaic(align_list[align_list['filter'] == 'f150w']['image'],
-                                        os.path.join(work_dir, 'jhat'))
-        print('Dolphot reference image:', refname)
-        
-        #copy files to dolphot directory
-        for fl in glob.glob(os.path.join(work_dir, 'jhat', '*jhat.fits')):
-            shutil.copy(fl, dolphot_basedir)
-
-        for fl in glob.glob(os.path.join(work_dir, 'jhat', 'out', '*i2d.fits')):
-            shutil.copy(fl, dolphot_basedir)
-
-        #generate dolphot param file
-        paramfiles = generate_dolphot_paramfile(dolphot_basedir)
-        #switch directory to basedir
-        os.chdir(dolphot_basedir)
-        #run dolphot
-        dolphot_images = glob.glob('*fits')
-        apply_nircammask(dolphot_images)
-        calc_sky(dolphot_images)
-        for i, paramfile in enumerate(paramfiles):
-            subprocess.run(f'dolphot {obj}_{i}.phot -p{paramfile}', shell=True)
+        print(f"Aligned {len(aligned_images)} images")

@@ -33,6 +33,9 @@ from photutils.psf.matching import resize_psf, SplitCosineBellWindow, create_mat
 from astropy.convolution import convolve, convolve_fft
 from reproject.mosaicking import find_optimal_celestial_wcs
 import subprocess
+from nbutils import get_detector_chip
+
+from nircam_setttings import *
 
 def create_parser():
     '''
@@ -45,6 +48,7 @@ def create_parser():
     '''
     parser = argparse.ArgumentParser(description='Reduce JWST data')
     parser.add_argument('--basedir', type=str, default='.', help='Root directory to search for data')
+    parser.add_argument('--object', type=str, default='dolphot', help='Object to reduce')
     parser.add_argument('--filter', nargs = '*', type=str,
                          help='List of filters to be combined, in order of increasing wavelength',
                          required = True)
@@ -542,15 +546,101 @@ def update_path(filter_table, outdir):
     
     return filter_table
 
-def setup_paramfile(refimage, images):
-    pass
+
+def setup_paramfile(dolphot_dir, refimage, files):
+    '''
+    Generate the dolphot parameter file
+
+    Parameters
+    ----------
+    basedir : str
+        Base directory to search for files
+    files : list
+        List of files to be included in the paramfile
+
+    Returns
+    -------
+    None
+    '''
+    
+    shutil.copy(refimage, dolphot_dir)
+    for fl_ in files:
+        shutil.copy(fl_, dolphot_dir)
+
+    phot_image_base = [os.path.basename(r).replace('.fits', '') for r in files]
+    phot_image_det = ['long' if 'long' in get_detector_chip(r) else 'short' for r in files]
+    N_img = len(files)
+
+    with open(f'{dolphot_dir}/dolphot.param', 'w') as f:
+        f.write('Nimg = {}\n'.format(N_img))
+        f.write('img0_file = {}\n'.format(os.path.basename(refimage).replace('.fits', '')))
+        for i, (img, det) in enumerate(zip(phot_image_base, phot_image_det)):
+            f.write('img{}_file = {}\n'.format(i+1, img))
+            if det == 'short':
+                for key, val in short_params.items():
+                    f.write('img{}_{} = {}\n'.format(i+1, key, val))
+            if det == 'long':
+                for key, val in long_params.items():
+                    f.write('img{}_{} = {}\n'.format(i+1, key, val))
+        for key, val in base_params.items():
+            f.write('{} = {}\n'.format(key, val))
+
+def apply_nircammask(files):
+    '''
+    Apply nircammask from dolphot to input files to mask pixels in 
+    images using DQ mask
+    
+    Parameters
+    ----------
+    files : list
+        List of files to apply nircammask to
+        
+    Returns
+    -------
+    None
+    '''
+    cmd = ['nircammask', '-etctime']
+    for fl in files:
+        # cmd += f' {fl}'
+        cmd.append(fl)
+
+    subprocess.run(cmd)  
+
+def calc_sky(files):
+    '''
+    Calculate the sky for input files using calcsky in dolphot
+
+    Parameters
+    ----------
+    files : list
+        List of files to calculate the sky for
+
+    Returns
+    -------
+    None
+    '''
+    cmd = 'calcsky {fits_base} {rin} {rout} {step} {sigma_low} {sigma_high}'
+    for fl in files:
+        #read params from options later
+        fits_base = fl.replace('.fits','')
+        print(fits_base)
+        rin = 15
+        rout = 25
+        step = -64
+        sigma_low = 2.25
+        sigma_high = 2.00
+        cmd_fl = cmd.format(fits_base=fits_base,rin=rin,rout=rout,
+                            step=step,sigma_low=sigma_low,sigma_high=sigma_high)
+        subprocess.run(cmd_fl,shell=True)
 
 if __name__ == '__main__':
     parser = create_parser()
     args = parser.parse_args()
     base_dir = args.basedir
+    obj = args.object
     filt = args.filter
     
+    dolphot_dir = os.path.join(base_dir, obj)
     inputfiles = glob.glob(os.path.join(base_dir, 'jhat', '*jhat.fits'))
     table = input_list(inputfiles)
 
@@ -580,8 +670,12 @@ if __name__ == '__main__':
             subtable, reftable = split_obs.subtables[b], split_obs.reftables[b]
 
             box_outdir = os.path.join(outdir, f'ref_{b}')
+            dolphot_outdir = os.path.join(dolphot_dir, f'nircam_{grp}_{b}')
             if not os.path.exists(box_outdir):
                 os.makedirs(box_outdir)
+
+            if not os.path.exists(dolphot_outdir):
+                os.makedirs(dolphot_outdir)
 
             bbox = split_obs.split_boxes[b]
             minx, maxx = int(np.abs(np.floor(min(bbox.exterior.xy[0])))), int(np.abs(np.ceil(max(bbox.exterior.xy[0]))))
@@ -613,4 +707,8 @@ if __name__ == '__main__':
             coadd_filename = os.path.join(box_outdir, f'coadd_{grp}_{b}_{target_filter}_i2d.fits')
             coadd(mosaics, target_filter, coadd_filename)
 
-            setup_paramfile(coadd_filename, subtable)
+            setup_paramfile(dolphot_outdir, coadd_filename, subtable['image'])
+
+            dolphot_images = glob.glob(os.path.join(dolphot_outdir, '*fits'))
+            apply_nircammask(dolphot_images)
+            calc_sky(dolphot_images)

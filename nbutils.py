@@ -93,6 +93,28 @@ def get_chip(image):
 
     return(chip)
 
+def get_detector_chip(filename):
+    '''
+    Get the detector chip from the file name
+
+    Parameters
+    ----------
+    filename : str
+        File name
+
+    Returns
+    -------
+    detector_chip : str
+        Detector chip
+    '''
+    fl_split = filename.split('_')
+    mask = ['nrc' in x for x in fl_split]
+    if any(mask):
+        idx = mask.index(True)
+        return fl_split[idx]
+    
+    return None
+
 def get_zpt(image, ccdchip=1, zptype='abmag'):
     # For a given image and optional ccdchip, determine the photometric zero
     # point in AB mag from PHOTFLAM and PHOTPLAM.
