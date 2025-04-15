@@ -56,10 +56,12 @@ def create_parser():
     return parser
 
 class split_observations(object):
-    def __init__(self, table, N_max=150, polygons=None, wcs_opt=None):
+    def __init__(self, table, N_max=150, min_overlap=0.05, pad=15, polygons=None, wcs_opt=None):
 
         self.table = table
         self.N_max = N_max
+        self.min_overlap = min_overlap
+        self.pad = pad
 
         if polygons is None:
             self.wcs, self.pgons, self.centroids = self.get_pgons(table)
@@ -129,14 +131,13 @@ class split_observations(object):
 
         return lstrings
     
-    def find_intersections(self, bbox=None, min_overlap=0.2):
+    def find_intersections(self, bbox=None, min_overlap=0.05):
 
         if bbox is None:
             bbox = self.split_boxes
 
         int_area = np.array([bbox.intersection(p).area/p.area for p in self.pgons])
         mask = int_area > min_overlap
-        print(mask.sum())
         return mask
     
     def get_bbox(self, pgons=None):
@@ -150,15 +151,26 @@ class split_observations(object):
 
         return bbox
     
+    def pad_box(self, box, pad=0):
+
+        bounds = box.bounds
+        padded_box_coords = [[bounds[0]-pad, bounds[1]-pad], [bounds[0]-pad, bounds[3]+pad], [bounds[2]+pad, bounds[3]+pad], [bounds[2]+pad, bounds[1]-pad]]
+        padded_box_coords = np.array(padded_box_coords)
+        padded_box_coords[padded_box_coords < 0] = 0
+        bbox = shapely.Polygon(padded_box_coords)
+
+        return bbox
+    
     def boxsplit(self, bbox=None, split_n=None):
 
         self.check_box = bbox
 
         if bbox is None:
-            bbox = self.get_bbox(self.pgons)
+            bbox = self.get_bbox(pgons=self.pgons)
 
-        mask = self.find_intersections(bbox)
+        mask = self.find_intersections(bbox, min_overlap=self.min_overlap)
         if mask.sum() < self.N_max:
+            bbox = self.pad_box(bbox, pad=self.pad)
             self.split_boxes.append(bbox)
             self.subtables.append(self.table[mask])
             self.reftables.append(self.table[self.find_intersections(bbox, min_overlap=0.0)])
@@ -189,6 +201,7 @@ class split_observations(object):
             for box_ in split_bbox:
                 if self.check_box == box_:
                     print(f"WARNING: Cannot split further, minmimum group size is {mask.sum()}")
+                    box_ = self.pad_box(box_, pad=self.pad)
                     self.split_boxes.append(box_)
                     self.subtables.append(self.table[mask])
                     self.reftables.append(self.table[self.find_intersections(box_, min_overlap=0.0)])
