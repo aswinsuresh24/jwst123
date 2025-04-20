@@ -19,6 +19,7 @@ launch.sh
 *.phot
 *.columns
 *.pages
+*.npy
 plots.ipynb
 pipeline.ipynb
 bug.ipynb
