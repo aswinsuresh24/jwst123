@@ -90,7 +90,10 @@ base_params = {'FitSky' : '2',
                 'UseWCS' : '2',
                 'PSFres' : '1',
                 'PosStep' : '0.25',
-                'NIRCAMvega' : '0'}
+                'NIRCAMvega' : '0',
+                'Align' : '1',
+                'aligntol' : '0',
+                'Rotate' : '1'}
 
 short_params = {'shift' : '0 0',
                 'xform' :'1 0 0',

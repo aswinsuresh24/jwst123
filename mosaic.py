@@ -90,7 +90,7 @@ class split_observations(object):
             region = fits.open(im)['SCI'].header['S_REGION']
             coords = np.array(region.split('POLYGON ICRS  ')[1].split(' '), dtype = float)
             coords = coords.reshape(4, 2)
-            x, y = wcs_opt.all_world2pix(coords[:, 0], coords[:, 1], 1)
+            x, y = wcs_opt.all_world2pix(coords[:, 0], coords[:, 1], 0)
             xy_coords = np.column_stack((x, y))
             pgons.append(shapely.Polygon(xy_coords))
             centroids.append(shapely.Polygon(xy_coords).centroid)
@@ -224,7 +224,7 @@ def get_pgons(table):
         region = fits.open(im)['SCI'].header['S_REGION']
         coords = np.array(region.split('POLYGON ICRS  ')[1].split(' '), dtype = float)
         coords = coords.reshape(4, 2)
-        x, y = wcs_opt.all_world2pix(coords[:, 0], coords[:, 1], 1)
+        x, y = wcs_opt.all_world2pix(coords[:, 0], coords[:, 1], 0)
         xy_coords = np.column_stack((x, y))
         pgons.append(shapely.Polygon(xy_coords))
         centroids.append(shapely.Polygon(xy_coords).centroid)
@@ -444,7 +444,7 @@ def convolve_images(filter_table, target_filter):
             sci_con = convolve_fft(sci, psf_kernel, normalize_kernel=True)
             err_con = convolve_fft(err, psf_kernel, normalize_kernel=True)
             sci_header = hdu['SCI'].header
-            sci_header['filter'] = filt.upper()
+            sci_header['filter'] = target_filter.upper()
 
             hdu['SCI'].header, hdu['SCI'].data = sci_header, sci_con
             hdu['ERR'].data = err_con
@@ -698,7 +698,7 @@ if __name__ == '__main__':
             wcs_slice = (slice(miny, maxy), slice(minx, maxx))
             box_wcs = wcs_.slice(wcs_slice)
             wcs_hdr = box_wcs.to_header()
-            wcs_hdr['NAXIS1'], wcs_hdr['NAXIS2'] = box_wcs._naxis[0], box_wcs._naxis[1]
+            wcs_hdr['NAXIS1'], wcs_hdr['NAXIS2'] = box_wcs._naxis[0], box_wcs._naxis[1] #change to max-min?
             gwcs_path = create_gwcs(outdir=box_outdir, sci_header=wcs_hdr)
 
             filters = np.unique(reftable['filter']).value
