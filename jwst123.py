@@ -388,11 +388,13 @@ def create_alignment_mosaic(filter_table, outdir, work_dir, infilter=None, align
         jh_image = os.path.join(outdir, os.path.basename(mosaic_name).replace('i2d.fits', 'jhat.fits'))
         shutil.move(jh_image, jh_image.replace('jhat.fits', 'jhat_i2d.fits'))
         aligned_mosaic = jh_image.replace('jhat.fits', 'jhat_i2d.fits')
-        # shutil.move(aligned_mosaic, work_dir)
         print(f'Gaia Dispersion for {aligned_mosaic}: {dispersion}"')
     
     else:
         dispersion = align_to_jwst(mosaic_name, align_to, outdir=outdir, verbose=False)
+        jh_image = os.path.join(outdir, os.path.basename(mosaic_name).replace('i2d.fits', 'jhat.fits'))
+        shutil.move(jh_image, jh_image.replace('jhat.fits', 'jhat_i2d.fits'))
+        aligned_mosaic = jh_image.replace('jhat.fits', 'jhat_i2d.fits')
         print(f'Dispersion for {mosaic_name}: {dispersion}"')
 
     return aligned_mosaic
@@ -707,12 +709,11 @@ def align_to_gaia(align_image, outdir, xshift = 0, yshift = 0, verbose = False):
         raise ValueError('Invalid image type')
     #compute dispersion
     gaia_table = query_gaia(align_image, save_file = None)
-    dispersion_initial = calc_dispersion(gaia_table, jhat_image.replace('_jhat.fits', '.phot.txt'), dist_limit = 1, plot = False)
+    dispersion_initial = calc_dispersion(gaia_table, jhat_image.replace('_jhat.fits', '.phot.txt'), dist_limit = 2, plot = False)
     print(f'Initial dispersion: {dispersion_initial}"')
-    # temp_cal_name = jhat_image.replace('jhat.fits', 'jhat_cal.fits')
     os.rename(jhat_image, temp_cal_name)
     refcat, photfilename = jwst_phot(temp_cal_name)
-    dispersion_final = calc_dispersion(gaia_table, photfilename, phot_image = phot_image, dist_limit = 1, plot = False)
+    dispersion_final = calc_dispersion(gaia_table, photfilename, phot_image = phot_image, dist_limit = 2, plot = False)
     print(f'Final dispersion: {dispersion_final}"')
     os.rename(temp_cal_name, jhat_image)
 
@@ -766,17 +767,24 @@ def align_to_jwst(align_image, photfilename, outdir, xshift = 0, yshift = 0, Nbr
                         yshift = yshift,
                         Nbright=Nbright,
                         **strict_jwst_params)       
-    
-    jhat_image = os.path.join(outdir, os.path.basename(align_image.replace('cal.fits', 'jhat.fits')))
-    #compute dispersion
-    # gaia_table = query_gaia(align_image, save_file = None)
+
+    if 'cal.fits' in align_image:
+        jhat_image = os.path.join(outdir, os.path.basename(align_image.replace('cal.fits', 'jhat.fits')))
+        temp_cal_name = jhat_image.replace('jhat.fits', 'jhat_cal.fits')
+        phot_image = False
+    elif 'i2d.fits' in align_image:
+        jhat_image = os.path.join(outdir, os.path.basename(align_image.replace('i2d.fits', 'jhat.fits')))
+        temp_cal_name = jhat_image.replace('jhat.fits', 'jhat_i2d.fits')
+        phot_image = temp_cal_name
+    else:
+        raise ValueError('Invalid image type')
+
     refcat_in = Table.read(photfilename, format='ascii')
-    dispersion_initial = calc_dispersion(refcat_in, jhat_image.replace('_jhat.fits', '.phot.txt'), dist_limit = 1, plot = False)
+    dispersion_initial = calc_dispersion(refcat_in, jhat_image.replace('_jhat.fits', '.phot.txt'), dist_limit = 2, plot = False)
     print(f'Initial dispersion: {dispersion_initial}"')
-    temp_cal_name = jhat_image.replace('jhat.fits', 'jhat_cal.fits')
     os.rename(jhat_image, temp_cal_name)
-    refcat, photfilename = jwst_phot(jhat_image.replace('jhat.fits', 'jhat_cal.fits'))
-    dispersion_final = calc_dispersion(refcat_in, photfilename, dist_limit = 1, plot = False)
+    aligned_refcat, aligned_photfilename = jwst_phot(temp_cal_name)
+    dispersion_final = calc_dispersion(refcat_in, aligned_photfilename, phot_image = phot_image, dist_limit = 2, plot = False)
     print(f'Final dispersion: {dispersion_final}"')
     os.rename(temp_cal_name, jhat_image)
 
