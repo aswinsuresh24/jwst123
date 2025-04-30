@@ -35,7 +35,7 @@ from reproject.mosaicking import find_optimal_celestial_wcs
 import subprocess
 from nbutils import get_detector_chip
 
-from jwst123.nircam_settings import *
+from nircam_settings import *
 
 def create_parser():
     '''

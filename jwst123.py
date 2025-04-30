@@ -44,7 +44,7 @@ from common import Constants
 from common import Options
 from common import Settings
 from common import Util
-from jwst123.nircam_settings import *
+from nircam_settings import *
 from nbutils import get_filter, get_instrument, get_chip, get_filter, input_list, xmatch_common, get_detector_chip
 from nbutils import get_zpt, add_visit_info, organize_reduction_tables, pick_deepest_images, create_filter_table
 
@@ -683,7 +683,7 @@ def align_to_gaia(align_image, outdir, xshift = 0, yshift = 0, verbose = False):
             yshift = yshift,
             #   Nbright = 1500,
             #   refmag_lim = (12,19),
-            **strict_gaia_params)
+            **relaxed_gaia_params)
     except: #relaxed cuts
         wcs_align.run_all(align_image,
             outsubdir=outdir,
@@ -693,7 +693,7 @@ def align_to_gaia(align_image, outdir, xshift = 0, yshift = 0, verbose = False):
             verbose = verbose,
             xshift = xshift,
             yshift = yshift,
-            **relaxed_gaia_params)
+            **strict_gaia_params)
     
     if 'cal.fits' in align_image:
         jhat_image = os.path.join(outdir, os.path.basename(align_image.replace('cal.fits', 'jhat.fits')))
@@ -755,7 +755,7 @@ def align_to_jwst(align_image, photfilename, outdir, xshift = 0, yshift = 0, Nbr
                         xshift = xshift,
                         yshift = yshift,
                         Nbright=Nbright,
-                        **strict_jwst_params)   
+                        **relaxed_jwst_params)   
 
     except: #relaxed cuts
         wcs_align.run_all(align_image,
@@ -765,7 +765,7 @@ def align_to_jwst(align_image, photfilename, outdir, xshift = 0, yshift = 0, Nbr
                         xshift = xshift,
                         yshift = yshift,
                         Nbright=Nbright,
-                        **relaxed_jwst_params)       
+                        **strict_jwst_params)       
     
     jhat_image = os.path.join(outdir, os.path.basename(align_image.replace('cal.fits', 'jhat.fits')))
     #compute dispersion
