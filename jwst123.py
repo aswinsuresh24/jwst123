@@ -44,7 +44,7 @@ from common import Constants
 from common import Options
 from common import Settings
 from common import Util
-from nircam_setttings import *
+from jwst123.nircam_settings import *
 from nbutils import get_filter, get_instrument, get_chip, get_filter, input_list, xmatch_common, get_detector_chip
 from nbutils import get_zpt, add_visit_info, organize_reduction_tables, pick_deepest_images, create_filter_table
 
@@ -290,12 +290,6 @@ def generate_level3_mosaic(inputfiles, outdir):
     if not os.path.exists(outdir):
         os.makedirs(outdir)
 
-    #move input files to outdir
-    if 'reference' in outdir:
-        for fl in inputfiles:
-            shutil.move(fl, outdir)
-        inputfiles = glob.glob(f'{outdir}/*nrc*jhat.fits')
-
     table = input_list(inputfiles)
     # tables = organize_reduction_tables(table, byvisit=False)
     # filter_name = table[0]['filter']
@@ -331,7 +325,7 @@ def generate_level3_mosaic(inputfiles, outdir):
     mosaic_name = f'{outdir_level3}/{filter_name}_i2d.fits'
     return mosaic_name
 
-def create_alignment_mosaic(filter_table, outdir, work_dir, infilter=None):
+def create_alignment_mosaic(filter_table, outdir, work_dir, infilter=None, align_to='gaia'):
     '''
     Create an alignement i2d mosiac from best available
     long wavelength filters or in the given input filter
@@ -351,6 +345,9 @@ def create_alignment_mosaic(filter_table, outdir, work_dir, infilter=None):
     aligned_mosaic : str
         Aligned mosaic file path
     '''
+    if align_to is None:
+        raise ValueError('Invalid alignment phot file')
+    
     #best filters for Gaia alignment, in order
     good_filters = ['f277w', 'f322w2', 'f356w', 'f250m', 'f300m']
 
@@ -386,12 +383,17 @@ def create_alignment_mosaic(filter_table, outdir, work_dir, infilter=None):
     mosaic_name = generate_level3_mosaic(inputfiles, outdir)
 
     #align the mosaic to Gaia
-    dispersion = align_to_gaia(mosaic_name, outdir, xshift = 0, yshift = 0, verbose=False)
-    jh_image = os.path.join(outdir, os.path.basename(mosaic_name).replace('i2d.fits', 'jhat.fits'))
-    shutil.move(jh_image, jh_image.replace('jhat.fits', 'jhat_i2d.fits'))
-    aligned_mosaic = jh_image.replace('jhat.fits', 'jhat_i2d.fits')
-    # shutil.move(aligned_mosaic, work_dir)
-    print(f'Dispersion for {aligned_mosaic}: {dispersion}"')
+    if align_to=='gaia':
+        dispersion = align_to_gaia(mosaic_name, outdir, xshift = 0, yshift = 0, verbose=False)
+        jh_image = os.path.join(outdir, os.path.basename(mosaic_name).replace('i2d.fits', 'jhat.fits'))
+        shutil.move(jh_image, jh_image.replace('jhat.fits', 'jhat_i2d.fits'))
+        aligned_mosaic = jh_image.replace('jhat.fits', 'jhat_i2d.fits')
+        # shutil.move(aligned_mosaic, work_dir)
+        print(f'Gaia Dispersion for {aligned_mosaic}: {dispersion}"')
+    
+    else:
+        dispersion = align_to_jwst(mosaic_name, align_to, outdir=outdir, verbose=False)
+        print(f'Dispersion for {mosaic_name}: {dispersion}"')
 
     return aligned_mosaic
 
@@ -536,7 +538,7 @@ def cut_gaia_sources(image, table_gaia):
     w = wcs.WCS(hdr)
     nx, ny = hdr['NAXIS1'], hdr['NAXIS2']
 
-    pix_coords = w.all_world2pix(np.array(table_gaia['ra']), np.array(table_gaia['dec']), 1)
+    pix_coords = w.all_world2pix(np.array(table_gaia['ra']), np.array(table_gaia['dec']), 0)
     im_x, im_y = pix_coords[0], pix_coords[1]
     mask = (im_x > 0) & (im_x < nx) & (im_y > 0) & (im_y < ny)
 
@@ -714,6 +716,9 @@ def align_to_gaia(align_image, outdir, xshift = 0, yshift = 0, verbose = False):
     print(f'Final dispersion: {dispersion_final}"')
     os.rename(temp_cal_name, jhat_image)
 
+    with fits.open(jhat_image, mode='update') as filehandle:
+        filehandle[0].header['GAIA_ALIGN_DISPERSION'] = dispersion_final
+
     return dispersion_final
 
 def align_to_jwst(align_image, photfilename, outdir, xshift = 0, yshift = 0, Nbright = 800, verbose = False):
@@ -774,6 +779,10 @@ def align_to_jwst(align_image, photfilename, outdir, xshift = 0, yshift = 0, Nbr
     dispersion_final = calc_dispersion(refcat_in, photfilename, dist_limit = 1, plot = False)
     print(f'Final dispersion: {dispersion_final}"')
     os.rename(temp_cal_name, jhat_image)
+
+    with fits.open(jhat_image, mode='update') as filehandle:
+        filehandle[0].header['JWST_ALIGN_DISPERSION'] = dispersion_final
+        filehandle[0].header['JWST_ALIGN_CAT'] = photfilename
 
     return dispersion_final
 
@@ -859,19 +868,27 @@ if __name__ == '__main__':
     obj = args.object
 
     dolphot_basedir = create_dirs(work_dir, obj)
+    GAIA_ALIGN_FILE = None
 
     input_images = get_input_images(workdir=work_dir)
     table = input_list(input_images)
     flt_vis_dict = visit_filter_dict(table)
     tables = organize_reduction_tables(table, byvisit=True, bymodule=False)
-    for tbl in tables[0]:
+    # for tbl in tables[0]:
+    for i, visit in enumerate([2, 1, 3, 4, 5]):
+        tbl = tables[0][visit-1]
         filters = np.unique(tbl['filter']).value
         filter_table = create_filter_table(tbl, filters)
-        # filter_table = {k: v for k, v in filter_table.items() 
-        #                 if k in ['f150w', 'f187n', 'f300m', 'f335m']}
-        mosaic_name = create_alignment_mosaic(filter_table, os.path.join(work_dir, 'align'), work_dir,
-                                              infilter = flt_vis_dict[np.unique(tbl['visit']).value[0]])
-        mosaic_photfile = fix_phot(mosaic_name)
+        if i == 0:
+            mosaic_name = create_alignment_mosaic(filter_table, os.path.join(work_dir, 'align', f'visit_{i}'), work_dir,
+                                              infilter = flt_vis_dict[np.unique(tbl['visit']).value[0]], align_to='gaia')
+            mosaic_photfile = fix_phot(mosaic_name)
+            GAIA_ALIGN_FILE = mosaic_photfile
+        else:
+            mosaic_name = create_alignment_mosaic(filter_table, os.path.join(work_dir, 'align', f'visit_{i}'), work_dir,
+                                              infilter = flt_vis_dict[np.unique(tbl['visit']).value[0]], align_to=GAIA_ALIGN_FILE)
+            mosaic_photfile = fix_phot(mosaic_name)
+
         print(f'Mosaic photfile: {mosaic_photfile}')
         for filt, tbl in filter_table.items():
             align_to_mosaic(mosaic_photfile, [r['image'] for r in tbl], os.path.join(work_dir, 'jhat'), 
