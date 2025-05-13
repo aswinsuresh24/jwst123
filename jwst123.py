@@ -243,6 +243,27 @@ def visit_filter_dict(table):
         
     return flt_vis_dict
 
+def order_visits(table):
+    visits = np.unique(table['visit']).value
+    field = []
+    for vis in visits:
+        tbl = table[table['visit'] == vis]
+        net_polygon = []
+        filters = np.unique(tbl['filter']).value
+        for filt in filters:
+            pgons = []
+            ft = tbl[tbl['filter'] == filt]
+            for im in ft['image']:
+                region = fits.open(im)['SCI'].header['S_REGION']
+                coords = np.array(region.split('POLYGON ICRS  ')[1].split(' '), dtype = float)
+                pgons.append(shapely.Polygon(coords.reshape(4, 2)))
+            net_polygon.append(shapely.unary_union(pgons))
+        field.append(shapely.unary_union(net_polygon))
+
+    sort_order = np.argsort([i.area for i in field])[::-1]
+    
+    return sort_order
+
 def jwst_phot(phot_img):
     '''
     Run photometry using jhat jwst_photclass
@@ -882,9 +903,10 @@ if __name__ == '__main__':
     table = input_list(input_images)
     flt_vis_dict = visit_filter_dict(table)
     tables = organize_reduction_tables(table, byvisit=True, bymodule=False)
+    sort_order = order_visits(table)
     # for tbl in tables[0]:
-    for i, visit in enumerate([2, 1, 3, 4, 5]):
-        tbl = tables[0][visit-1]
+    for i, visit in enumerate(sort_order):
+        tbl = tables[0][visit]
         filters = np.unique(tbl['filter']).value
         filter_table = create_filter_table(tbl, filters)
         if i == 0:
