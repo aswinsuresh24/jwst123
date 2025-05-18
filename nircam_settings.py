@@ -91,7 +91,7 @@ base_params = {'FitSky' : '2',
                 'PSFres' : '1',
                 'PosStep' : '0.25',
                 'NIRCAMvega' : '0',
-                'Align' : '1',
+                'Align' : '4',
                 'aligntol' : '0',
                 'Rotate' : '1'}
 

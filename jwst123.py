@@ -45,8 +45,7 @@ from common import Options
 from common import Settings
 from common import Util
 from nircam_settings import *
-from nbutils import get_filter, get_instrument, get_chip, get_filter, input_list, xmatch_common, get_detector_chip
-from nbutils import get_zpt, add_visit_info, organize_reduction_tables, pick_deepest_images, create_filter_table
+from nbutils import input_list, xmatch_common, get_detector_chip, create_filter_table
 
 @contextmanager
 def suppress_stdout():
@@ -215,9 +214,13 @@ def visit_filter_dict(table):
         net_polygon = []
         filters = np.unique(tbl['filter']).value
         for filt in filters:
+            if 'N' in filt:
+                continue
             pgons = []
             ft = tbl[tbl['filter'] == filt]
-            for im in ft['image']:
+            for im, pl in zip(ft['image'], ft['pupil']):
+                if 'N' in pl:
+                    continue
                 region = fits.open(im)['SCI'].header['S_REGION']
                 coords = np.array(region.split('POLYGON ICRS  ')[1].split(' '), dtype = float)
                 pgons.append(shapely.Polygon(coords.reshape(4, 2)))
@@ -312,9 +315,6 @@ def generate_level3_mosaic(inputfiles, outdir):
         os.makedirs(outdir)
 
     table = input_list(inputfiles)
-    # tables = organize_reduction_tables(table, byvisit=False)
-    # filter_name = table[0]['filter']
-    # module_name = table[0]['module']
     filters = np.unique([r['filter'] for r in table])
     filter_name = '_'.join(filters)
     nircam_asn_file = f'{outdir}/{filter_name}.json'
@@ -399,8 +399,7 @@ def create_alignment_mosaic(filter_table, outdir, work_dir, infilter=None, align
         print(f'Dispersion for {image}: {dispersion}"')
 
     #create i2d mosaic from relative aligned images
-    # inputfiles = glob.glob(f'{outdir}/*long*jhat*.fits') #this does not account for bymodule=True
-    inputfiles = [os.path.join(outdir,os.path.basename(i.replace('cal.fits', 'jhat.fits'))) for i in tbl['image']]
+    inputfiles = [os.path.join(outdir,os.path.basename(i.replace('cal.fits', 'jhat.fits'))) for i in align_table['image']]
     mosaic_name = generate_level3_mosaic(inputfiles, outdir)
 
     #align the mosaic to Gaia
@@ -706,7 +705,7 @@ def align_to_gaia(align_image, outdir, xshift = 0, yshift = 0, verbose = False):
             yshift = yshift,
             #   Nbright = 1500,
             #   refmag_lim = (12,19),
-            **relaxed_gaia_params)
+            **strict_gaia_params)
     except: #relaxed cuts
         wcs_align.run_all(align_image,
             outsubdir=outdir,
@@ -716,7 +715,7 @@ def align_to_gaia(align_image, outdir, xshift = 0, yshift = 0, verbose = False):
             verbose = verbose,
             xshift = xshift,
             yshift = yshift,
-            **strict_gaia_params)
+            **relaxed_gaia_params)
     
     if 'cal.fits' in align_image:
         jhat_image = os.path.join(outdir, os.path.basename(align_image.replace('cal.fits', 'jhat.fits')))
@@ -739,7 +738,7 @@ def align_to_gaia(align_image, outdir, xshift = 0, yshift = 0, verbose = False):
     os.rename(temp_cal_name, jhat_image)
 
     with fits.open(jhat_image, mode='update') as filehandle:
-        filehandle[0].header['GAIA_ALIGN_DISPERSION'] = dispersion_final
+        filehandle[0].header['GADISP'] = dispersion_final
 
     return dispersion_final
 
@@ -777,7 +776,7 @@ def align_to_jwst(align_image, photfilename, outdir, xshift = 0, yshift = 0, Nbr
                         xshift = xshift,
                         yshift = yshift,
                         Nbright=Nbright,
-                        **relaxed_jwst_params)   
+                        **strict_jwst_params)   
 
     except: #relaxed cuts
         wcs_align.run_all(align_image,
@@ -787,7 +786,7 @@ def align_to_jwst(align_image, photfilename, outdir, xshift = 0, yshift = 0, Nbr
                         xshift = xshift,
                         yshift = yshift,
                         Nbright=Nbright,
-                        **strict_jwst_params)       
+                        **relaxed_jwst_params)       
 
     if 'cal.fits' in align_image:
         jhat_image = os.path.join(outdir, os.path.basename(align_image.replace('cal.fits', 'jhat.fits')))
@@ -810,8 +809,8 @@ def align_to_jwst(align_image, photfilename, outdir, xshift = 0, yshift = 0, Nbr
     os.rename(temp_cal_name, jhat_image)
 
     with fits.open(jhat_image, mode='update') as filehandle:
-        filehandle[0].header['JWST_ALIGN_DISPERSION'] = dispersion_final
-        filehandle[0].header['JWST_ALIGN_CAT'] = photfilename
+        filehandle[0].header['JWDISP'] = dispersion_final
+        filehandle[0].header['JWCAT'] = os.path.basename(photfilename)
 
     return dispersion_final
 
@@ -829,17 +828,69 @@ def fix_phot(mosaic):
     photfile : str  
         Fixed photometry file name
     '''
-    # temp_mosaic_name = mosaic.replace('jhat.fits', 'i2d.fits')
-    # os.rename(mosaic, temp_mosaic_name)
     refcat, photfile = jwst_phot(mosaic)
     w = wcs.WCS(fits.open(mosaic)['SCI'].header)
     jh_radec = w.all_pix2world(refcat['x'], refcat['y'], 0)
     jh_ra, jh_dec = np.array(jh_radec[0]), np.array(jh_radec[1])
     refcat['ra'], refcat['dec'] = jh_ra, jh_dec
-    #photfile.replace('i2d', 'i2d_new')
     refcat.write(photfile.replace('i2d', 'i2d.corr'), format = 'ascii', overwrite = True)
-    # os.rename(temp_mosaic_name, mosaic)
     return photfile.replace('i2d', 'i2d.corr')
+
+def get_visit_geoms(table):
+    visits = np.unique(table['visit']).value
+    field = []
+    for vis in visits:
+        tbl = table[table['visit'] == vis]
+        net_polygon = []
+        filters = np.unique(tbl['filter']).value
+        for filt in filters:
+            pgons = []
+            ft = tbl[tbl['filter'] == filt]
+            for im in ft['image']:
+                region = fits.open(im)['SCI'].header['S_REGION']
+                coords = np.array(region.split('POLYGON ICRS  ')[1].split(' '), dtype = float)
+                pgons.append(shapely.Polygon(coords.reshape(4, 2)))
+            net_polygon.append(shapely.unary_union(pgons))
+        field.append(shapely.unary_union(net_polygon))
+    
+    return dict(zip(visits, field))
+
+def pick_visit(align_pgon, visit_geoms):
+    if align_pgon is None:
+        #this could still pick a narrowband visit 
+        arg = np.argmax([visit_geoms[i].area for i in visit_geoms.keys()])
+        vis = list(visit_geoms.keys())[arg]
+
+    else:
+        intersect_area = [align_pgon.intersection(visit_geoms[i]).area/visit_geoms[i].area for i in visit_geoms.keys()]
+        arg = np.argmax(intersect_area)
+        vis = list(visit_geoms.keys())[arg]
+    
+    return vis
+
+def update_refcat(mosaic_name, photfile, out_refcat, align_pgon):
+    flt = fits.getval(mosaic_name, keyword='FILTER', ext=0)
+    ppl = fits.getval(mosaic_name, keyword='PUPIL', ext=0)
+    if ('N' in flt) or ('N' in ppl):
+        #could be an edge case where a visit overlaps only with another narrowband visit
+        return 0
+    
+    if not os.path.exists(out_refcat):
+        refcat = Table.read(photfile, format='ascii')
+        refcat[['ra', 'dec', 'mag', 'dmag']].write(out_refcat, format='ascii', overwrite=True)
+
+    else:
+        mastercat = Table.read(out_refcat, format='ascii')
+        refcat = Table.read(photfile, format='ascii')
+
+        pts = shapely.points(refcat['ra'], refcat['dec'])
+        mask = shapely.contains(align_pgon, pts)
+        refcat = refcat[~mask]
+
+        mastercat = vstack([mastercat, refcat[['ra', 'dec', 'mag', 'dmag']]])
+        mastercat.write(out_refcat, format='ascii', overwrite=True)
+    
+    return 0
 
 def align_to_mosaic(mosaic_photfile, cal_images, outdir, gaia_offset = (0, 0), verbose = False):
     '''
@@ -897,31 +948,51 @@ if __name__ == '__main__':
     obj = args.object
 
     dolphot_basedir = create_dirs(work_dir, obj)
-    GAIA_ALIGN_FILE = None
 
     input_images = get_input_images(workdir=work_dir)
     table = input_list(input_images)
+    ngroups, nvisits = np.unique(table['group'], np.unique(table['visit']))
     flt_vis_dict = visit_filter_dict(table)
-    tables = organize_reduction_tables(table, byvisit=True, bymodule=False)
-    sort_order = order_visits(table)
-    # for tbl in tables[0]:
-    for i, visit in enumerate(sort_order):
-        tbl = tables[0][visit]
-        filters = np.unique(tbl['filter']).value
-        filter_table = create_filter_table(tbl, filters)
-        if i == 0:
-            mosaic_name = create_alignment_mosaic(filter_table, os.path.join(work_dir, 'align', f'visit_{i}'), work_dir,
-                                              infilter = flt_vis_dict[np.unique(tbl['visit']).value[0]], align_to='gaia')
-            mosaic_photfile = fix_phot(mosaic_name)
-            GAIA_ALIGN_FILE = mosaic_photfile
-        else:
-            mosaic_name = create_alignment_mosaic(filter_table, os.path.join(work_dir, 'align', f'visit_{i}'), work_dir,
-                                              infilter = flt_vis_dict[np.unique(tbl['visit']).value[0]], align_to=GAIA_ALIGN_FILE)
-            mosaic_photfile = fix_phot(mosaic_name)
 
-        print(f'Mosaic photfile: {mosaic_photfile}')
-        for filt, tbl in filter_table.items():
-            align_to_mosaic(mosaic_photfile, [r['image'] for r in tbl], os.path.join(work_dir, 'jhat'), 
-                            gaia_offset = (0,0), verbose = False)
-        aligned_images = glob.glob(os.path.join(work_dir, 'jhat', f'*nrc*jhat.fits'))
-        print(f"Aligned {len(aligned_images)} images")
+    for g in ngroups:
+        combined_photfile = os.path.join(work_dir, 'align', f'group_{g}', 'reference_catalog.txt')
+        subtable = table[table['group'] == g]
+        visit_geoms = get_visit_geoms(subtable)
+        align_pgon = None
+
+        for i in range(len(nvisits)):
+            vis = pick_visit(align_pgon, visit_geoms)
+            visit_tbl = subtable[subtable['visit'] == vis]
+            
+            filters = np.unique(visit_tbl['filter']).value
+            filter_table = create_filter_table(visit_tbl, filters)
+            infilter = flt_vis_dict[vis]
+
+            if i == 0:
+                mosaic_name = create_alignment_mosaic(filter_table, 
+                                                      os.path.join(work_dir, 'align', f'group_{g}', f'visit_{vis}'), 
+                                                      work_dir, 
+                                                      infilter = infilter, 
+                                                      align_to='gaia')
+
+            else:
+                mosaic_name = create_alignment_mosaic(filter_table, 
+                                                      os.path.join(work_dir, 'align', f'group_{g}', f'visit_{vis}'), 
+                                                      work_dir, 
+                                                      infilter = infilter, 
+                                                      align_to=combined_photfile)
+                
+            mosaic_photfile = fix_phot(mosaic_name)
+            _ = update_refcat(mosaic_name, mosaic_photfile, out_refcat=combined_photfile, align_pgon=align_pgon)
+
+            print(f'Mosaic photfile: {mosaic_photfile}')
+            for filt, tbl in filter_table.items():
+                align_to_mosaic(mosaic_photfile, [r['image'] for r in tbl], os.path.join(work_dir, 'jhat'), 
+                                gaia_offset = (0,0), verbose = False)
+
+            if align_pgon is None:
+                align_pgon = visit_geoms[vis]
+            else:
+                align_pgon = shapely.unary_union([align_pgon, visit_geoms[vis]])
+
+            visit_geoms.pop(vis)

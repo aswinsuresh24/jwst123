@@ -25,6 +25,7 @@ from stwcs import updatewcs
 from scipy.interpolate import interp1d
 import pandas as pd
 from astropy.coordinates import SkyCoord
+import shapely
 
 # Internal dependencies
 from common import Constants
@@ -320,6 +321,46 @@ def pick_deepest_images(images, reffilter=None, avoid_wfpc2=False, refinst=None)
 
     return(reference_images)
 
+def get_sky_pgons(table):
+    pgons = []
+    for im in table['image']:
+        region = fits.open(im)['SCI'].header['S_REGION']
+        coords = np.array(region.split('POLYGON ICRS  ')[1].split(' '), dtype = float)
+        coords = coords.reshape(4, 2)
+        pgons.append(shapely.Polygon(coords))
+    pgons= np.array(pgons)
+
+    return pgons
+
+def edit_visits_groups(table):
+    unique_visits = np.unique(table['visit'])
+    visit_mapping = {old: new for new, old in enumerate(unique_visits)}
+    table['visit'] = [visit_mapping[v] for v in table['visit']]
+
+    table.add_column(Column(name='group', data=[None]*len(table)))
+    pgons = get_sky_pgons(table)
+
+    net_field = shapely.unary_union(pgons)
+    if type(net_field) == shapely.geometry.polygon.Polygon:
+        net_field = shapely.MultiPolygon([net_field])
+
+    for i, gm_ in enumerate(net_field.geoms):
+        int_area = np.array([i.intersection(gm_).area/i.area for i in pgons])
+        mask = int_area > 0
+        table['group'][mask] = i
+
+    for visit in np.unique(table['visit']):
+        groups = np.unique(table[table['visit'] == visit]['group'])
+        if len(groups) > 1:
+            table['group'][table['visit'] == visit] = min(groups)
+
+    unique_groups = np.unique(table['group'])
+    group_mapping = {old: new for new, old in enumerate(unique_groups)}
+    table['group'] = [group_mapping[g] for g in table['group']]
+    table.sort(['visit'])
+
+    return table
+
 def input_list(input_images):
     img = input_images
     zptype = 'abmag'
@@ -352,49 +393,17 @@ def input_list(input_images):
     module = [get_module(image) for image in img]
     chip= [get_chip(image) for image in img]
     zpt = [get_zpt(i, ccdchip=c, zptype=zptype) for i,c in zip(img,chip)]
+    visit = [fits.getval(i, 'VISIT_ID', ext=0) for i in img]
+    pupil = [fits.getval(i, 'PUPIL', ext=0) for i in img]
 
     if not image_number:
         image_number = [0 for image in img]
 
-    obstable = Table([img,exp,dat,fil,ins,module,zpt,chip,image_number],
+    obstable = Table([img,exp,dat,fil,ins,module,zpt,chip,image_number, visit, pupil],
         names=['image','exptime','datetime','filter','instrument', 'module',
-         'zeropoint','chip','imagenumber'])
+         'zeropoint','chip','imagenumber', 'visit', 'pupil'])
     obstable.sort('datetime')
-    obstable = add_visit_info(obstable)
-    
-    obstable.add_column(Column([' '*99]*len(obstable), name='drizname'))
-    for i,row in enumerate(obstable):
-        visit = row['visit']
-        n = str(visit).zfill(4)
-        inst = row['instrument']
-        filt = row['filter']
-        module = row['module']
-
-        # Visit should correspond to first image so they're all the same
-        visittable = obstable[obstable['visit']==visit]
-        refimage = visittable['image'][0]
-        if 'DATE-OBS' in h.keys():
-            date_obj = Time(fits.getval(refimage, 'DATE-OBS'))
-        else:
-            date_obj = Time(fits.getval(refimage, 'EXPSTART'), format='mjd')
-        date_str = date_obj.datetime.strftime('%y%m%d')
-
-        # Make a photpipe-like image name
-        drizname = ''
-        objname = None
-        if objname:
-            drizname = '{obj}.{inst}.{module}.{filt}.ut{date}_{n}.drz.fits'
-            drizname = drizname.format(inst=inst.split('_')[0],
-                filt=filt, n=n, date=date_str, obj=objname, module=module)
-        else:
-            drizname = '{inst}.{module}.{filt}.ut{date}_{n}.drz.fits'
-            drizname = drizname.format(inst=inst.split('_')[0],
-                filt=filt, n=n, date=date_str, module=module)
-
-        if '.':
-            drizname = os.path.join('.', drizname)
-
-        obstable[i]['drizname'] = drizname
+    obstable = edit_visits_groups(obstable)
         
     return obstable
 
