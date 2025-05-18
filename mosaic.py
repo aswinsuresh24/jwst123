@@ -53,10 +53,11 @@ def create_parser():
     parser.add_argument('--filter', nargs = '*', type=str,
                          help='List of filters to be combined, in order of increasing wavelength',
                          required = True)
+    parser.add_argument('--spec_groups', type=str, default=None, help='List of images to be grouped')
     return parser
 
 class split_observations(object):
-    def __init__(self, table, N_max=150, min_overlap=0.05, pad=15, polygons=None, wcs_opt=None):
+    def __init__(self, table, N_max=150, min_overlap=0.2, pad=15, polygons=None, wcs_opt=None):
 
         self.table = table
         self.N_max = N_max
@@ -560,7 +561,6 @@ def update_path(filter_table, outdir):
     
     return filter_table
 
-
 def setup_paramfile(dolphot_dir, refimage, files):
     '''
     Generate the dolphot parameter file
@@ -647,6 +647,14 @@ def calc_sky(files):
                             step=step,sigma_low=sigma_low,sigma_high=sigma_high)
         subprocess.run(cmd_fl,shell=True)
 
+def edit_spec_groups(table, spec_group_file):
+    files = np.loadtxt(spec_group_file, dtype=str, delimiter='\n')
+    ngrp = np.max(table['group'])
+    for fl in files:
+        table['group'][table['image'] == fl] = ngrp+1
+
+    return table
+
 if __name__ == '__main__':
     parser = create_parser()
     args = parser.parse_args()
@@ -654,24 +662,15 @@ if __name__ == '__main__':
     obj = args.object
     nmax = args.nmax
     filt = args.filter
+    spec_group_file = args.spec_groups
     
     dolphot_dir = os.path.join(base_dir, obj)
     inputfiles = glob.glob(os.path.join(base_dir, 'jhat', '*jhat.fits'))
     table = input_list(inputfiles)
-
-    table.add_column(Column(name='group', data=[None]*len(table)))
-    wcs_opt, pgons, centroids = get_pgons(table)
-
-    net_field = shapely.unary_union(pgons)
-    if type(net_field) == shapely.geometry.polygon.Polygon:
-        net_field = shapely.MultiPolygon([net_field])
-
-    for i, gm_ in enumerate(net_field.geoms):
-        int_area = np.array([i.intersection(gm_).area/i.area for i in pgons])
-        mask = int_area > 0
-        table['group'][mask] = i
-
+    if spec_group_file:
+        table = edit_spec_groups(table, spec_group_file)
     ngroups = np.unique(table['group'])
+
     out_dict = create_dirs(base_dir, len(ngroups))
 
     for grp in ngroups:
