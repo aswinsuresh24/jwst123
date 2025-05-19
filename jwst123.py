@@ -793,7 +793,7 @@ def align_jwst_image(align_image, outdir, gaia = False, photfilename = None, xsh
                  xshift=xshift, yshift=yshift, Nbright=Nbright, verbose=verbose)
         disp = jwst_dispersion(align_image=align_image, outdir=outdir, photfile=photfilename, gaia=gaia)
 
-    print(f'Final {'Gaia' if gaia else 'JWST'} dispersion for {align_image}: {disp}"')
+    print(f'''Final {'Gaia' if gaia else 'JWST'} dispersion for {align_image}: {disp}"''')
 
 def fix_phot(mosaic):
     '''
@@ -931,16 +931,17 @@ if __name__ == '__main__':
 
     input_images = get_input_images(workdir=work_dir)
     table = input_list(input_images)
-    ngroups, nvisits = np.unique(table['group'], np.unique(table['visit']))
+    ngroups, nvisits = np.unique(table['group']), np.unique(table['visit'])
     flt_vis_dict = visit_filter_dict(table)
 
     for g in ngroups:
         combined_photfile = os.path.join(work_dir, 'align', f'group_{g}', 'reference_catalog.txt')
         subtable = table[table['group'] == g]
+        subvisits = np.unique(subtable['visit'])
         visit_geoms = get_visit_geoms(subtable)
         align_pgon = None
 
-        for i in range(len(nvisits)):
+        for i in range(len(subvisits)):
             vis = pick_visit(align_pgon, visit_geoms)
             visit_tbl = subtable[subtable['visit'] == vis]
             
@@ -951,14 +952,12 @@ if __name__ == '__main__':
             if i == 0:
                 mosaic_name = create_alignment_mosaic(filter_table, 
                                                       os.path.join(work_dir, 'align', f'group_{g}', f'visit_{vis}'), 
-                                                      work_dir, 
                                                       infilter = infilter, 
                                                       align_to='gaia')
 
             else:
                 mosaic_name = create_alignment_mosaic(filter_table, 
                                                       os.path.join(work_dir, 'align', f'group_{g}', f'visit_{vis}'), 
-                                                      work_dir, 
                                                       infilter = infilter, 
                                                       align_to=combined_photfile)
                 
