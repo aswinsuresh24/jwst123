@@ -6,7 +6,10 @@ __pycache__
 mastDownload/
 raw/
 *red*/
-*temp*/
+plots/
+data/
+frb20250316a/
+*temp*
 launch.sh
 *.sh
 *.fits
@@ -21,6 +24,6 @@ launch.sh
 *.pages
 *.npy
 plots.ipynb
-pipeline.ipynb
 bug.ipynb
 process_data.ipynb
+frb.ipynb

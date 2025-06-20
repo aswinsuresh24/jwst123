@@ -655,12 +655,15 @@ def calc_dispersion(ref_table, phot_file,
     
     dist_matched_df = xmatch_common(jh_skycoord, ref_skycoord, dist_limit=dist_limit)
 
-    clip_mean, clip_median, clip_std = sigma_clipped_stats(dist_matched_df['d2d']**2, sigma_lower=3, sigma_upper=1)
+    clip_mean, clip_median, clip_std = sigma_clipped_stats(dist_matched_df['d2d']**2, sigma_lower=None, sigma_upper=2)
     mean_dispersion, std_dispersion = np.sqrt(clip_mean), np.sqrt(clip_std)
     
     if plot:
         plt.hist(dist_matched_df['d2d'], bins = 40, histtype = 'step', 
                  linestyle = '--', color = 'cornflowerblue')
+        plt.axvline(mean_dispersion, linestyle = '--', alpha = 0.8, color = 'royalblue', label = 'mean')
+        plt.axvline(mean_dispersion + 2*std_dispersion, linestyle = '--', alpha = 0.8, color = 'purple', label = r'mean+2$\sigma$')
+        plt.legend()
         plt.xlabel('d2d (arcsec)')
         plt.ylabel('frequency')
         plt.title('JWST-Gaia xmatch')
@@ -669,7 +672,7 @@ def calc_dispersion(ref_table, phot_file,
         
     return mean_dispersion, std_dispersion
 
-def jwst_dispersion(align_image, outdir, photfile=None, gaia=False):
+def jwst_dispersion(align_image, outdir, photfile=None, gaia=False, plot=False):
     if 'cal.fits' in align_image:
         jhat_image = os.path.join(outdir, os.path.basename(align_image.replace('cal.fits', 'jhat.fits')))
         temp_cal_name = jhat_image.replace('jhat.fits', 'jhat_cal.fits')
@@ -688,13 +691,13 @@ def jwst_dispersion(align_image, outdir, photfile=None, gaia=False):
             raise ValueError('Input photometric catalog is required')
         refcat = Table.read(photfile, format='ascii')
 
-    disp_in_mean, disp_in_std = calc_dispersion(refcat, jhat_image.replace('_jhat.fits', '.phot.txt'), dist_limit = 2, plot = False)
-    print(f'Initial dispersion: {disp_in_mean}')
+    disp_in_mean, disp_in_std = calc_dispersion(refcat, jhat_image.replace('_jhat.fits', '.phot.txt'), dist_limit = 0.5, plot = plot)
+    print(f'Initial dispersion: {disp_in_mean*1000} mas')
 
     os.rename(jhat_image, temp_cal_name)
     align_cat, align_photfile = jwst_phot(temp_cal_name)
-    disp_fn_mean, disp_fn_std = calc_dispersion(refcat, align_photfile, phot_image = phot_image, dist_limit = 2, plot = False)
-    print(f'Final dispersion: {disp_fn_mean}')
+    disp_fn_mean, disp_fn_std = calc_dispersion(refcat, align_photfile, phot_image = phot_image, dist_limit = 0.5, plot = plot)
+    print(f'Final dispersion: {disp_fn_mean*1000} mas')
     os.rename(temp_cal_name, jhat_image)
 
     with fits.open(jhat_image, mode='update') as filehandle:
@@ -741,7 +744,7 @@ def run_jhat(align_image, outdir, params, gaia = False, photfilename = None, xsh
         wcs_align.run_all(align_image,
             outsubdir = outdir,
             refcatname = 'Gaia',
-            refcat_pmflag = True, #reject proper motion stars
+            pmflag = True, # propagate proper motion to observation time
             use_dq = False,
             verbose = verbose,
             xshift = xshift,
@@ -761,9 +764,12 @@ def run_jhat(align_image, outdir, params, gaia = False, photfilename = None, xsh
             Nbright=Nbright,
             **params)
         
-def align_jwst_image(align_image, outdir, gaia = False, photfilename = None, xshift = 0, yshift = 0, Nbright = 800, verbose = False):
+def align_jwst_image(align_image, outdir, gaia = False, photfilename = None, xshift = 0, yshift = 0, Nbright = 800, verbose = False, plot = False):
     print(f"Aligning {os.path.basename(align_image)} to {'Gaia' if gaia else 'JWST'}")
     params = strict_gaia_params if gaia else strict_jwst_params
+    if plot:
+        params['showplots'] = 2
+        
     try:
         pixscale = np.abs(fits.getval(align_image, 'CDELT1', ext=1)*3600)
     except:
@@ -779,21 +785,24 @@ def align_jwst_image(align_image, outdir, gaia = False, photfilename = None, xsh
              yshift=yshift, 
              Nbright=Nbright, 
              verbose=verbose)
-    disp = jwst_dispersion(align_image=align_image, outdir=outdir, photfile=photfilename, gaia=gaia)
+    disp = jwst_dispersion(align_image=align_image, outdir=outdir, photfile=photfilename, gaia=gaia, plot=plot)
 
     if disp/pixscale > 1:
         params['iterate_with_xyshifts'] = False
         run_jhat(align_image=align_image, outdir=outdir, params=params, gaia=gaia, photfilename=photfilename, 
                  xshift=xshift, yshift=yshift, Nbright=Nbright, verbose=verbose)
-        disp = jwst_dispersion(align_image=align_image, outdir=outdir, photfile=photfilename, gaia=gaia)
+        disp = jwst_dispersion(align_image=align_image, outdir=outdir, photfile=photfilename, gaia=gaia, plot=plot)
 
     if disp/pixscale > 1:
         params = relaxed_gaia_params if gaia else relaxed_jwst_params
         run_jhat(align_image=align_image, outdir=outdir, params=params, gaia=gaia, photfilename=photfilename, 
                  xshift=xshift, yshift=yshift, Nbright=Nbright, verbose=verbose)
-        disp = jwst_dispersion(align_image=align_image, outdir=outdir, photfile=photfilename, gaia=gaia)
+        disp = jwst_dispersion(align_image=align_image, outdir=outdir, photfile=photfilename, gaia=gaia, plot=plot)
 
-    print(f'''Final {'Gaia' if gaia else 'JWST'} dispersion for {align_image}: {disp}"''')
+    print(f'''Final {'Gaia' if gaia else 'JWST'} dispersion for {align_image}: {disp*1000} mas''')
+
+    if gaia and (disp/pixscale > 1):
+        raise ValueError('High Gaia alignment dispersion, fix manually')
 
 def fix_phot(mosaic):
     '''
@@ -892,7 +901,7 @@ def align_to_mosaic(mosaic_photfile, cal_images, outdir, gaia_offset = (0, 0), v
     '''
     xshift, yshift = gaia_offset
     for im in cal_images:
-        align_jwst_image(align_image=im, outdir=outdir, gaia=False, photfilename=mosaic_photfile, xshift=xshift, yshift=yshift)
+        align_jwst_image(align_image=im, outdir=outdir, gaia=False, photfilename=mosaic_photfile, xshift=xshift, yshift=yshift, verbose=verbose)
 
 def create_dirs(work_dir, obj):
     '''

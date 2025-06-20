@@ -391,7 +391,7 @@ def create_gwcs(outdir, sci_header=None, wcs_out=None, shape_out=None):
 
     detector_frame = cf.Frame2D(name="detector", axes_names=("x", "y"),
                                 unit=(u.pix, u.pix))
-    sky_frame = cf.CelestialFrame(reference_frame=coord.ICRS(), name='icrs',
+    sky_frame = cf.CelestialFrame(reference_frame=coord.ICRS(), name='world',
                                 unit=(u.deg, u.deg))
 
     pipeline = [(detector_frame, det2sky),
