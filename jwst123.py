@@ -15,6 +15,7 @@ import progressbar
 import copy
 import requests
 import random
+from multiprocessing import Pool
 import astropy.wcs as wcs
 import numpy as np
 from contextlib import contextmanager
@@ -82,7 +83,27 @@ def create_parser():
     parser = argparse.ArgumentParser(description='Reduce JWST data')
     parser.add_argument('--workdir', type=str, default='.', help='Root directory to search for data')
     parser.add_argument('--object', type=str, default='m92', help='Object to reduce')
+    parser.add_argument('--ncores', type=int, default=1, help='Number of CPU cores')
     return parser
+
+def mp_init(init_success: int = 0,
+            init_failed: int = 0,
+            init_success_files: list =[]):
+    global success
+    global failed
+    global success_files
+    success = init_success
+    failed = init_failed
+    success_files = init_success_files
+
+def align_parallel_worker(align_image, outdir, gaia = False, photfilename = None, xshift = 0, 
+                          yshift = 0, Nbright = 800, verbose = False, plot = False):
+    try:
+        align_jwst_image(align_image=align_image, outdir=outdir, gaia=gaia, photfilename=photfilename, xshift=xshift, 
+                         yshift=yshift, Nbright=Nbright, verbose=verbose, plot=plot)
+        
+    except Exception as e:
+        raise e
 
 def get_input_images(pattern=None, workdir=None):
     '''
@@ -346,7 +367,7 @@ def generate_level3_mosaic(inputfiles, outdir):
     mosaic_name = f'{outdir_level3}/{filter_name}_i2d.fits'
     return mosaic_name
 
-def create_alignment_mosaic(filter_table, outdir, infilter=None, align_to='gaia'):
+def create_alignment_mosaic(filter_table, outdir, infilter=None, align_to='gaia', ncores = 10):
     '''
     Create an alignement i2d mosiac from best available
     long wavelength filters or in the given input filter
@@ -390,12 +411,25 @@ def create_alignment_mosaic(filter_table, outdir, infilter=None, align_to='gaia'
     #add alignment groups to the table to pick corect
     #reference image for each module
     align_table = add_alignment_groups(align_table)
+    jhat_success_images = [os.path.exists(os.path.join(outdir, os.path.basename(i.replace('cal.fits', 'jhat.fits')))) for i in align_table['image']]
+    success_files = list(np.array(align_table['image'])[np.array(jhat_success_images)])
+    p = Pool(initializer=mp_init, processes=ncores, initargs=(0, 0, success_files))
+    jobs = []
 
     for row in align_table:
         image = row['image']
         ref_image = row['ref_img']
-        refcat, photfilename = jwst_phot(ref_image)
-        align_jwst_image(align_image=image, outdir=outdir, gaia=False, photfilename=photfilename)
+        if not os.path.exists(ref_image.replace('.fits','.phot.txt')):
+            _, photfilename = jwst_phot(ref_image)
+        else:
+            photfilename = ref_image.replace('.fits','.phot.txt')
+
+        jobs.append(p.apply_async(align_parallel_worker,
+                                  args=(image, outdir, False, photfilename, 
+                                        0, 0, 800, False, False)))
+            
+    for job in jobs:
+        job.get()
 
     #create i2d mosaic from relative aligned images
     inputfiles = [os.path.join(outdir,os.path.basename(i.replace('cal.fits', 'jhat.fits'))) for i in align_table['image']]
@@ -745,7 +779,7 @@ def run_jhat(align_image, outdir, params, gaia = False, photfilename = None, xsh
             outsubdir = outdir,
             refcatname = 'Gaia',
             pmflag = True, # propagate proper motion to observation time
-            use_dq = False,
+            use_dq = True,
             verbose = verbose,
             xshift = xshift,
             yshift = yshift,
@@ -758,6 +792,7 @@ def run_jhat(align_image, outdir, params, gaia = False, photfilename = None, xsh
         wcs_align.run_all(align_image,
             outsubdir=outdir,
             refcatname=photfilename,
+            use_dq = True,
             verbose = verbose,
             xshift = xshift,
             yshift = yshift,
@@ -776,33 +811,59 @@ def align_jwst_image(align_image, outdir, gaia = False, photfilename = None, xsh
         pixscale = np.abs(fits.getval(align_image, 'CD1_2', ext=1)*3600)
     pixscale = 0.031 if pixscale < 0.032 else 0.062
 
-    run_jhat(align_image=align_image, 
-             outdir=outdir, 
-             params=params, 
-             gaia=gaia, 
-             photfilename=photfilename, 
-             xshift=xshift, 
-             yshift=yshift, 
-             Nbright=Nbright, 
-             verbose=verbose)
-    disp = jwst_dispersion(align_image=align_image, outdir=outdir, photfile=photfilename, gaia=gaia, plot=plot)
+    try:
+        run_jhat(align_image=align_image, 
+                outdir=outdir, 
+                params=params, 
+                gaia=gaia, 
+                photfilename=photfilename, 
+                xshift=xshift, 
+                yshift=yshift, 
+                Nbright=Nbright, 
+                verbose=verbose)
+        disp = jwst_dispersion(align_image=align_image, outdir=outdir, photfile=photfilename, gaia=gaia, plot=plot)
+    except Exception as e:
+        print(e)
+        disp = 99.99
 
     if disp/pixscale > 1:
         params['iterate_with_xyshifts'] = False
-        run_jhat(align_image=align_image, outdir=outdir, params=params, gaia=gaia, photfilename=photfilename, 
-                 xshift=xshift, yshift=yshift, Nbright=Nbright, verbose=verbose)
-        disp = jwst_dispersion(align_image=align_image, outdir=outdir, photfile=photfilename, gaia=gaia, plot=plot)
+        try:
+            run_jhat(align_image=align_image, outdir=outdir, params=params, gaia=gaia, photfilename=photfilename, 
+                    xshift=xshift, yshift=yshift, Nbright=Nbright, verbose=verbose)
+            disp = jwst_dispersion(align_image=align_image, outdir=outdir, photfile=photfilename, gaia=gaia, plot=plot)
+        except Exception as e:
+            print(e)
+            disp = 99.99
 
     if disp/pixscale > 1:
         params = relaxed_gaia_params if gaia else relaxed_jwst_params
-        run_jhat(align_image=align_image, outdir=outdir, params=params, gaia=gaia, photfilename=photfilename, 
-                 xshift=xshift, yshift=yshift, Nbright=Nbright, verbose=verbose)
-        disp = jwst_dispersion(align_image=align_image, outdir=outdir, photfile=photfilename, gaia=gaia, plot=plot)
+        try:
+            run_jhat(align_image=align_image, outdir=outdir, params=params, gaia=gaia, photfilename=photfilename, 
+                    xshift=xshift, yshift=yshift, Nbright=Nbright, verbose=verbose)
+            disp = jwst_dispersion(align_image=align_image, outdir=outdir, photfile=photfilename, gaia=gaia, plot=plot)
+        except Exception as e:
+            print(e)
+            disp = 99.99
 
     print(f'''Final {'Gaia' if gaia else 'JWST'} dispersion for {align_image}: {disp*1000} mas''')
 
-    if gaia and (disp/pixscale > 1):
-        raise ValueError('High Gaia alignment dispersion, fix manually')
+    if disp/pixscale > 1:
+        print('Copying unaligned image to output, redo alignment')
+        if 'cal.fits' in align_image:
+            jhat_image = os.path.join(outdir, os.path.basename(align_image.replace('cal.fits', 'jhat.fits')))
+        elif 'i2d.fits' in align_image:
+            jhat_image = os.path.join(outdir, os.path.basename(align_image.replace('i2d.fits', 'jhat.fits')))
+
+        shutil.copy(align_image, jhat_image)
+        with fits.open(jhat_image, mode='update') as filehandle:
+            if gaia:
+                filehandle[0].header['GADISPM'] = disp
+                filehandle[0].header['GADISPS'] = 'NaN'
+            else:
+                filehandle[0].header['JWDISPM'] = disp
+                filehandle[0].header['JWDISPS'] = 'NaN'
+                filehandle[0].header['JWCAT'] = 'NaN'
 
 def fix_phot(mosaic):
     '''
@@ -882,7 +943,7 @@ def update_refcat(mosaic_name, photfile, out_refcat, align_pgon):
     
     return 0
 
-def align_to_mosaic(mosaic_photfile, cal_images, outdir, gaia_offset = (0, 0), verbose = False):
+def align_to_mosaic(mosaic_photfile, cal_images, outdir, gaia_offset = (0, 0), verbose = False, ncores = 10):
     '''
     Align JWST images to the alignment mosaic
 
@@ -900,8 +961,17 @@ def align_to_mosaic(mosaic_photfile, cal_images, outdir, gaia_offset = (0, 0), v
     None
     '''
     xshift, yshift = gaia_offset
+    jhat_success_images = [os.path.exists(os.path.join(outdir, os.path.basename(i.replace('cal.fits', 'jhat.fits')))) for i in cal_images]
+    success_files = list(np.array(cal_images)[np.array(jhat_success_images)])
+    p = Pool(initializer=mp_init, processes=ncores, initargs=(0, 0,success_files))
+    jobs = []
     for im in cal_images:
-        align_jwst_image(align_image=im, outdir=outdir, gaia=False, photfilename=mosaic_photfile, xshift=xshift, yshift=yshift, verbose=verbose)
+        jobs.append(p.apply_async(align_parallel_worker,
+                                  args=(im, outdir, False, mosaic_photfile, xshift, 
+                                        yshift, 800, verbose, False)))
+        
+    for job in jobs:
+        job.get()
 
 def create_dirs(work_dir, obj):
     '''
@@ -935,6 +1005,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
     work_dir = args.workdir
     obj = args.object
+    ncores = args.ncores
 
     dolphot_basedir = create_dirs(work_dir, obj)
 
@@ -962,13 +1033,15 @@ if __name__ == '__main__':
                 mosaic_name = create_alignment_mosaic(filter_table, 
                                                       os.path.join(work_dir, 'align', f'group_{g}', f'visit_{vis}'), 
                                                       infilter = infilter, 
-                                                      align_to='gaia')
+                                                      align_to='gaia',
+                                                      ncores=ncores)
 
             else:
                 mosaic_name = create_alignment_mosaic(filter_table, 
                                                       os.path.join(work_dir, 'align', f'group_{g}', f'visit_{vis}'), 
                                                       infilter = infilter, 
-                                                      align_to=combined_photfile)
+                                                      align_to=combined_photfile,
+                                                      ncores=ncores)
                 
             mosaic_photfile = fix_phot(mosaic_name)
             _ = update_refcat(mosaic_name, mosaic_photfile, out_refcat=combined_photfile, align_pgon=align_pgon)
@@ -976,7 +1049,7 @@ if __name__ == '__main__':
             print(f'Mosaic photfile: {mosaic_photfile}')
             for filt, tbl in filter_table.items():
                 align_to_mosaic(mosaic_photfile, [r['image'] for r in tbl], os.path.join(work_dir, 'jhat'), 
-                                gaia_offset = (0,0), verbose = False)
+                                gaia_offset = (0,0), verbose = False, ncores=ncores)
 
             if align_pgon is None:
                 align_pgon = visit_geoms[vis]
