@@ -51,9 +51,6 @@ def create_parser():
     parser.add_argument('--basedir', type=str, default='.', help='Root directory to search for data')
     parser.add_argument('--object', type=str, default='dolphot', help='Object to reduce')
     parser.add_argument('--nmax', type=int, default=150, help='Maximum number of images in a dolphot run')
-    parser.add_argument('--filter', nargs = '*', type=str,
-                         help='List of filters to be combined, in order of increasing wavelength',
-                         required = True)
     parser.add_argument('--spec_groups', type=str, default=None, help='List of images to be grouped')
     return parser
 
@@ -74,7 +71,6 @@ class split_observations(object):
 
         self.split_boxes = []
         self.subimages = []
-        # self.subtables = []
         self.reftables = []
         self.refpgons = []
         self.filtertables = []
@@ -178,12 +174,9 @@ class split_observations(object):
             bbox = self.pad_box(bbox, pad=self.pad)
             self.split_boxes.append(bbox)
             self.subimages.append(self.table[mask]['image'])
-            # self.subtables.append(self.table[mask])
             ref_mask = self.find_intersections(bbox, min_overlap=0.0)
             self.reftables.append(self.table[ref_mask])
             self.refpgons.append(self.pgons[ref_mask])
-            # self.reftables.append(self.table[self.find_intersections(bbox, min_overlap=0.0)])
-            # self.ref_flt_pgons.append(np.stack((self.table[ref_mask]['filter'], self.pgons[ref_mask])))
             return None
 
         else:
@@ -214,42 +207,44 @@ class split_observations(object):
                     box_ = self.pad_box(box_, pad=self.pad)
                     self.split_boxes.append(box_)
                     self.subimages.append(self.table[mask]['image'])
-                    # self.subtables.append(self.table[mask])
                     ref_mask = self.find_intersections(box_, min_overlap=0.0)
                     self.reftables.append(self.table[ref_mask])
                     self.refpgons.append(self.pgons[ref_mask])
-                    # self.ref_flt_pgons.append(np.stack((self.table[ref_mask]['filter'], self.pgons[ref_mask])))
                     continue
                 _ = self.boxsplit(box_)
             
             return None
         
-    def get_sw_filter_table(self, bbox, reftable, refpgons, tol = 0.05):
-        filters = np.unique(reftable['filter'])
-        swmask = np.array([int(i[1:4]) for i in filters]) < 215
-        swmask = swmask & np.array(['n' not in i for i in filters])
+    def get_sw_filter_tables(self, tol = 0.05):
+        for b in range(len(self.split_boxes)):
+            bbox, reftable, refpgons = self.split_boxes[b], self.reftables[b], self.refpgons[b]
+            filters = np.unique(reftable['filter'])
+            swmask = np.array([int(i[1:4]) for i in filters]) < 215
+            swmask = swmask & np.array(['n' not in i for i in filters])
 
-        ftp = []
-        for flt_ in filters[swmask]:
-            ftp.append(shapely.unary_union(refpgons[reftable['filter'] == flt_]))
-        ftp = np.array(ftp)
-        swp = shapely.unary_union(ftp)
-        
-        net_ref_pgon = shapely.unary_union(refpgons).intersection(bbox)
-        best_tol = net_ref_pgon.difference(swp).area/net_ref_pgon.area
-        tol = max(tol, best_tol)
-        net_ar, ar_ = net_ref_pgon.area, 1
-        ref_filters = []
+            ftp = []
+            for flt_ in filters[swmask]:
+                ftp.append(shapely.unary_union(refpgons[reftable['filter'] == flt_]))
+            ftp = np.array(ftp)
+            swp = shapely.unary_union(ftp)
+            
+            net_ref_pgon = shapely.unary_union(refpgons).intersection(bbox)
+            best_tol = net_ref_pgon.difference(swp).area/net_ref_pgon.area
+            tol = max(tol, best_tol)
+            net_ar, ar_ = net_ref_pgon.area, 1
+            ref_filters = []
 
-        while ar_ > tol:
-            max_int = np.argmax([i.intersection(net_ref_pgon).area/net_ref_pgon.area for i in ftp])
-            fp = ftp[max_int]
-            ref_filters.append(filters[swmask][max_int])
-            ar_ = net_ref_pgon.difference(fp).area/net_ar
-            net_ref_pgon = net_ref_pgon.difference(fp)
+            while ar_ > tol:
+                max_int = np.argmax([i.intersection(net_ref_pgon).area/net_ref_pgon.area for i in ftp])
+                fp = ftp[max_int]
+                ref_filters.append(filters[swmask][max_int])
+                ar_ = net_ref_pgon.difference(fp).area/net_ar
+                net_ref_pgon = net_ref_pgon.difference(fp)
 
-        filter_table = create_filter_table(reftable, ref_filters)
-        self.filtertables.append(filter_table)
+            filter_table = create_filter_table(reftable, ref_filters)
+            self.filtertables.append(filter_table)
+
+        return self.filtertables
     
     def add_plt_patch(self, pgon, ax, facecolor = 'lightblue', edgecolor = 'blue', alpha = 0.3):
         vertices = np.array(pgon.exterior.xy)
@@ -373,8 +368,6 @@ def create_coadd_mosaic(table, outdir, filt, centroid=None,
     if not os.path.exists(outdir):
         os.makedirs(outdir)
 
-    # table = input_list(inputfiles)
-    # table = table[table['filter'] == filt]
     nircam_asn_file = f'{outdir}/{filt}.json'
     base_filenames = np.array([os.path.basename(r['image']) for r in table])
     asn3 = asn_from_list.asn_from_list(base_filenames,
@@ -725,7 +718,6 @@ if __name__ == '__main__':
     base_dir = args.basedir
     obj = args.object
     nmax = args.nmax
-    filt = args.filter
     spec_group_file = args.spec_groups
     
     dolphot_dir = os.path.join(base_dir, obj)
@@ -742,10 +734,11 @@ if __name__ == '__main__':
         outdir = out_dict[grp]
         split_obs = split_observations(table = tbl_, N_max = nmax)
         split_obs.boxsplit()
+        filter_tables = split_obs.get_sw_filter_tables(tol = 0.05)
         wcs_ = split_obs.wcs
 
         for b in range(len(split_obs.split_boxes)):
-            subtable, reftable = split_obs.subtables[b], split_obs.reftables[b]
+            subimages, filter_table = split_obs.subimages[b], filter_tables[b]
 
             box_outdir = os.path.join(outdir, f'ref_{b}')
             dolphot_outdir = os.path.join(dolphot_dir, f'nircam_{grp}_{b}')
@@ -764,10 +757,6 @@ if __name__ == '__main__':
             wcs_hdr['NAXIS1'], wcs_hdr['NAXIS2'] = box_wcs._naxis[0], box_wcs._naxis[1] #change to max-min?
             gwcs_path = create_gwcs(outdir=box_outdir, sci_header=wcs_hdr)
 
-            filters = np.unique(reftable['filter']).value
-            filter_table = create_filter_table(reftable, filters)
-            filter_table = {k: v for k, v in filter_table.items() 
-                            if k in filt}
             filter_keys = sorted(filter_table.keys())
             target_filter = filter_keys[-1]
 
@@ -785,7 +774,7 @@ if __name__ == '__main__':
             coadd_filename = os.path.join(box_outdir, f'coadd_{grp}_{b}_{target_filter}_i2d.fits')
             coadd(mosaics, target_filter, coadd_filename)
 
-            setup_paramfile(dolphot_outdir, coadd_filename, subtable['image'])
+            setup_paramfile(dolphot_outdir, coadd_filename, subimages)
 
             dolphot_images = glob.glob(os.path.join(dolphot_outdir, '*fits'))
             apply_nircammask(dolphot_images)
