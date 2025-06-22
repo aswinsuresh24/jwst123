@@ -724,7 +724,8 @@ def edit_spec_groups(table, spec_group_file):
 
     return table
 
-def mosaic_parallel_worker(subimages, filter_table, bbox, wcs_, outdir, dolphot_dir):
+def mosaic_parallel_worker(subimages, filter_table, bbox, wcs_, 
+                           grp, b, outdir, dolphot_dir):
     try:
         box_outdir = os.path.join(outdir, f'ref_{b}')
         dolphot_outdir = os.path.join(dolphot_dir, f'nircam_{grp}_{b}')
@@ -786,6 +787,9 @@ if __name__ == '__main__':
 
     out_dict = create_dirs(base_dir, len(ngroups))
 
+    p = Pool(initializer=mp_init, processes=ncores, initargs=(0, 0, []))
+    jobs = []
+
     for grp in ngroups:
         tbl_ = table[table['group'] == grp]
         outdir = out_dict[grp]
@@ -794,14 +798,11 @@ if __name__ == '__main__':
         filter_tables = split_obs.get_sw_filter_tables(tol = 0.05)
         wcs_ = split_obs.wcs
 
-        p = Pool(initializer=mp_init, processes=min(ncores, len(split_obs.split_boxes)), initargs=(0, 0, []))
-        jobs = []
-
         for b in range(len(split_obs.split_boxes)):
             subimages, filter_table, bbox = split_obs.subimages[b], filter_tables[b], split_obs.split_boxes[b]
             jobs.append(p.apply_async(mosaic_parallel_worker,
                                       args=(subimages, filter_table, bbox, wcs_,
-                                            outdir, dolphot_dir)))
+                                            grp, b, outdir, dolphot_dir)))
         
-        for job in jobs:
-            job.get()
+    for job in jobs:
+        job.get()
