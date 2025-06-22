@@ -11,6 +11,7 @@ from jwst.associations.lib.rules_level3_base import DMS_Level3_Base
 import shapely
 import shapely.ops
 import matplotlib.pyplot as plt
+from matplotlib.patches import Polygon
 import shutil
 from pathlib import Path
 
@@ -72,8 +73,11 @@ class split_observations(object):
             self.centroids = np.array([i.centroid for i in polygons])
 
         self.split_boxes = []
-        self.subtables = []
+        self.subimages = []
+        # self.subtables = []
         self.reftables = []
+        self.refpgons = []
+        self.filtertables = []
         self.physical_split = True
         self.check_box = None
 
@@ -173,8 +177,13 @@ class split_observations(object):
         if mask.sum() < self.N_max:
             bbox = self.pad_box(bbox, pad=self.pad)
             self.split_boxes.append(bbox)
-            self.subtables.append(self.table[mask])
-            self.reftables.append(self.table[self.find_intersections(bbox, min_overlap=0.0)])
+            self.subimages.append(self.table[mask]['image'])
+            # self.subtables.append(self.table[mask])
+            ref_mask = self.find_intersections(bbox, min_overlap=0.0)
+            self.reftables.append(self.table[ref_mask])
+            self.refpgons.append(self.pgons[ref_mask])
+            # self.reftables.append(self.table[self.find_intersections(bbox, min_overlap=0.0)])
+            # self.ref_flt_pgons.append(np.stack((self.table[ref_mask]['filter'], self.pgons[ref_mask])))
             return None
 
         else:
@@ -204,12 +213,64 @@ class split_observations(object):
                     print(f"WARNING: Cannot split further, minmimum group size is {mask.sum()}")
                     box_ = self.pad_box(box_, pad=self.pad)
                     self.split_boxes.append(box_)
-                    self.subtables.append(self.table[mask])
-                    self.reftables.append(self.table[self.find_intersections(box_, min_overlap=0.0)])
+                    self.subimages.append(self.table[mask]['image'])
+                    # self.subtables.append(self.table[mask])
+                    ref_mask = self.find_intersections(box_, min_overlap=0.0)
+                    self.reftables.append(self.table[ref_mask])
+                    self.refpgons.append(self.pgons[ref_mask])
+                    # self.ref_flt_pgons.append(np.stack((self.table[ref_mask]['filter'], self.pgons[ref_mask])))
                     continue
                 _ = self.boxsplit(box_)
             
             return None
+        
+    def get_sw_filter_table(self, bbox, reftable, refpgons, tol = 0.05):
+        filters = np.unique(reftable['filter'])
+        swmask = np.array([int(i[1:4]) for i in filters]) < 215
+        swmask = swmask & np.array(['n' not in i for i in filters])
+
+        ftp = []
+        for flt_ in filters[swmask]:
+            ftp.append(shapely.unary_union(refpgons[reftable['filter'] == flt_]))
+        ftp = np.array(ftp)
+        swp = shapely.unary_union(ftp)
+        
+        net_ref_pgon = shapely.unary_union(refpgons).intersection(bbox)
+        best_tol = net_ref_pgon.difference(swp).area/net_ref_pgon.area
+        tol = max(tol, best_tol)
+        net_ar, ar_ = net_ref_pgon.area, 1
+        ref_filters = []
+
+        while ar_ > tol:
+            max_int = np.argmax([i.intersection(net_ref_pgon).area/net_ref_pgon.area for i in ftp])
+            fp = ftp[max_int]
+            ref_filters.append(filters[swmask][max_int])
+            ar_ = net_ref_pgon.difference(fp).area/net_ar
+            net_ref_pgon = net_ref_pgon.difference(fp)
+
+        filter_table = create_filter_table(reftable, ref_filters)
+        self.filtertables.append(filter_table)
+    
+    def add_plt_patch(self, pgon, ax, facecolor = 'lightblue', edgecolor = 'blue', alpha = 0.3):
+        vertices = np.array(pgon.exterior.xy)
+        polygon = Polygon(vertices.T, closed=True, facecolor=facecolor, edgecolor=edgecolor, alpha = alpha)
+        ax.add_patch(polygon)
+
+    def plot_obs(self, cents = False):
+        fig, ax = plt.subplots(1, 1)
+        for p_ in self.pgons:
+            self.add_plt_patch(p_, ax)
+        for p_ in self.split_boxes:
+            self.add_plt_patch(p_, ax, facecolor = 'none', edgecolor = 'black', alpha = 1)
+        if cents:
+            ax.scatter([i.x for i in self.centroids], [i.y for i in self.centroids], color = 'mediumvioletred', s = 2)
+        xmin, xmax = min([min(i.exterior.xy[0]) for i in self.pgons]), max([max(i.exterior.xy[0]) for i in self.pgons])
+        ymin, ymax = min([min(i.exterior.xy[1]) for i in self.pgons]), max([max(i.exterior.xy[1]) for i in self.pgons])
+        ax.set_xlim(xmin, xmax)
+        ax.set_ylim(ymin, ymax)
+        ax.set_xlabel('x (pix)')
+        ax.set_ylabel('y (pix)')
+        
         
 def get_pgons(table):
     image_hdus = [fits.open(i)[1] for i in table['image']]
@@ -419,6 +480,8 @@ def create_psf_kernel(ref_filter: str, in_filter: str, ovs=5, fov=81):
     nrc = stpsf.NIRCam()
     nrc.filter = in_filter.upper()
     nrc.detector = 'NRCA3'
+    if nrc.filter == 'F150W2':
+        nrc.SHORT_WAVELENGTH_MAX = 2.39e-6
     psf_src = nrc.calc_psf(oversample=ovs, fov_pixels=fov) 
 
     #use detector distorted version
@@ -648,10 +711,11 @@ def calc_sky(files):
         subprocess.run(cmd_fl,shell=True)
 
 def edit_spec_groups(table, spec_group_file):
-    files = np.loadtxt(spec_group_file, dtype=str, delimiter='\n')
+    files = np.loadtxt(spec_group_file, dtype=str)
     ngrp = np.max(table['group'])
+    basenames = np.array([os.path.basename(i) for i in table['image']])
     for fl in files:
-        table['group'][table['image'] == fl] = ngrp+1
+        table['group'][basenames == fl] = ngrp+1
 
     return table
 
