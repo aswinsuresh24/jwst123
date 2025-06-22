@@ -2,6 +2,7 @@ import glob, os
 from nbutils import input_list, create_filter_table
 import argparse
 import numpy as np
+from multiprocessing import Pool
 from jwst.pipeline import calwebb_image3
 
 import glob,os
@@ -52,7 +53,18 @@ def create_parser():
     parser.add_argument('--object', type=str, default='dolphot', help='Object to reduce')
     parser.add_argument('--nmax', type=int, default=150, help='Maximum number of images in a dolphot run')
     parser.add_argument('--spec_groups', type=str, default=None, help='List of images to be grouped')
+    parser.add_argument('--ncores', type=int, default=1, help='Number of CPU cores')
     return parser
+
+def mp_init(init_success: int = 0,
+            init_failed: int = 0,
+            init_success_files: list =[]):
+    global success
+    global failed
+    global success_files
+    success = init_success
+    failed = init_failed
+    success_files = init_success_files
 
 class split_observations(object):
     def __init__(self, table, N_max=150, min_overlap=0.2, pad=15, polygons=None, wcs_opt=None):
@@ -712,6 +724,50 @@ def edit_spec_groups(table, spec_group_file):
 
     return table
 
+def mosaic_parallel_worker(subimages, filter_table, bbox, wcs_, outdir, dolphot_dir):
+    try:
+        box_outdir = os.path.join(outdir, f'ref_{b}')
+        dolphot_outdir = os.path.join(dolphot_dir, f'nircam_{grp}_{b}')
+        if not os.path.exists(box_outdir):
+            os.makedirs(box_outdir)
+
+        if not os.path.exists(dolphot_outdir):
+            os.makedirs(dolphot_outdir)
+
+        minx, maxx = int(np.abs(np.floor(min(bbox.exterior.xy[0])))), int(np.abs(np.ceil(max(bbox.exterior.xy[0]))))
+        miny, maxy = int(np.abs(np.floor(min(bbox.exterior.xy[1])))), int(np.abs(np.ceil(max(bbox.exterior.xy[1]))))
+        wcs_slice = (slice(miny, maxy), slice(minx, maxx))
+        box_wcs = wcs_.slice(wcs_slice)
+        wcs_hdr = box_wcs.to_header()
+        wcs_hdr['NAXIS1'], wcs_hdr['NAXIS2'] = box_wcs._naxis[0], box_wcs._naxis[1] #change to max-min?
+        gwcs_path = create_gwcs(outdir=box_outdir, sci_header=wcs_hdr)
+
+        filter_keys = sorted(filter_table.keys())
+        target_filter = filter_keys[-1]
+
+        copy_files(filter_table, box_outdir)
+        filter_table = update_path(filter_table, box_outdir)
+
+        convolve_images(filter_table, target_filter)
+
+        mosaics = []
+        for flt_key in filter_keys:
+            driz_image = create_coadd_mosaic(filter_table[flt_key], outdir=box_outdir, filt=flt_key, 
+                                            centroid=None, output_shape=None, gwcs_file=gwcs_path)
+            mosaics.append(driz_image)
+
+        coadd_filename = os.path.join(box_outdir, f'coadd_{grp}_{b}_{target_filter}_i2d.fits')
+        coadd(mosaics, target_filter, coadd_filename)
+
+        setup_paramfile(dolphot_outdir, coadd_filename, subimages)
+
+        dolphot_images = glob.glob(os.path.join(dolphot_outdir, '*fits'))
+        apply_nircammask(dolphot_images)
+        calc_sky(dolphot_images)
+    
+    except Exception as e:
+        raise e
+
 if __name__ == '__main__':
     parser = create_parser()
     args = parser.parse_args()
@@ -719,6 +775,7 @@ if __name__ == '__main__':
     obj = args.object
     nmax = args.nmax
     spec_group_file = args.spec_groups
+    ncores = args.ncores
     
     dolphot_dir = os.path.join(base_dir, obj)
     inputfiles = glob.glob(os.path.join(base_dir, 'jhat', '*jhat.fits'))
@@ -737,45 +794,14 @@ if __name__ == '__main__':
         filter_tables = split_obs.get_sw_filter_tables(tol = 0.05)
         wcs_ = split_obs.wcs
 
+        p = Pool(initializer=mp_init, processes=min(ncores, len(split_obs.split_boxes)), initargs=(0, 0, []))
+        jobs = []
+
         for b in range(len(split_obs.split_boxes)):
-            subimages, filter_table = split_obs.subimages[b], filter_tables[b]
-
-            box_outdir = os.path.join(outdir, f'ref_{b}')
-            dolphot_outdir = os.path.join(dolphot_dir, f'nircam_{grp}_{b}')
-            if not os.path.exists(box_outdir):
-                os.makedirs(box_outdir)
-
-            if not os.path.exists(dolphot_outdir):
-                os.makedirs(dolphot_outdir)
-
-            bbox = split_obs.split_boxes[b]
-            minx, maxx = int(np.abs(np.floor(min(bbox.exterior.xy[0])))), int(np.abs(np.ceil(max(bbox.exterior.xy[0]))))
-            miny, maxy = int(np.abs(np.floor(min(bbox.exterior.xy[1])))), int(np.abs(np.ceil(max(bbox.exterior.xy[1]))))
-            wcs_slice = (slice(miny, maxy), slice(minx, maxx))
-            box_wcs = wcs_.slice(wcs_slice)
-            wcs_hdr = box_wcs.to_header()
-            wcs_hdr['NAXIS1'], wcs_hdr['NAXIS2'] = box_wcs._naxis[0], box_wcs._naxis[1] #change to max-min?
-            gwcs_path = create_gwcs(outdir=box_outdir, sci_header=wcs_hdr)
-
-            filter_keys = sorted(filter_table.keys())
-            target_filter = filter_keys[-1]
-
-            copy_files(filter_table, box_outdir)
-            filter_table = update_path(filter_table, box_outdir)
-
-            convolve_images(filter_table, target_filter)
-
-            mosaics = []
-            for flt_key in filter_keys:
-                driz_image = create_coadd_mosaic(filter_table[flt_key], outdir=box_outdir, filt=flt_key, 
-                                                centroid=None, output_shape=None, gwcs_file=gwcs_path)
-                mosaics.append(driz_image)
-
-            coadd_filename = os.path.join(box_outdir, f'coadd_{grp}_{b}_{target_filter}_i2d.fits')
-            coadd(mosaics, target_filter, coadd_filename)
-
-            setup_paramfile(dolphot_outdir, coadd_filename, subimages)
-
-            dolphot_images = glob.glob(os.path.join(dolphot_outdir, '*fits'))
-            apply_nircammask(dolphot_images)
-            calc_sky(dolphot_images)
+            subimages, filter_table, bbox = split_obs.subimages[b], filter_tables[b], split_obs.split_boxes[b]
+            jobs.append(p.apply_async(mosaic_parallel_worker,
+                                      args=(subimages, filter_table, bbox, wcs_,
+                                            outdir, dolphot_dir)))
+        
+        for job in jobs:
+            job.get()
