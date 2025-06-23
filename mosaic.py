@@ -484,15 +484,17 @@ def find_optimal_wcs(filter_table):
 def create_psf_kernel(ref_filter: str, in_filter: str, ovs=5, fov=81):
     nrc = stpsf.NIRCam()
     nrc.filter = in_filter.upper()
-    nrc.detector = 'NRCA3'
     if nrc.filter == 'F150W2':
         nrc.SHORT_WAVELENGTH_MAX = 2.39e-6
+    nrc.detector = 'NRCA3'
     psf_src = nrc.calc_psf(oversample=ovs, fov_pixels=fov) 
 
     #use detector distorted version
     psf_src_dat = psf_src[3].data/psf_src[3].data.sum()
 
     nrc.filter = ref_filter.upper()
+    if nrc.filter == 'F150W2':
+        nrc.SHORT_WAVELENGTH_MAX = 2.39e-6
     psf_ref = nrc.calc_psf(oversample=ovs, fov_pixels=fov)
     psf_ref_dat = psf_ref[3].data/psf_ref[3].data.sum()
 
