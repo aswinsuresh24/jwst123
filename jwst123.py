@@ -235,12 +235,12 @@ def visit_filter_dict(table):
         net_polygon = []
         filters = np.unique(tbl['filter']).value
         for filt in filters:
-            if 'N' in filt:
+            if 'N' in filt.upper():
                 continue
             pgons = []
             ft = tbl[tbl['filter'] == filt]
             for im, pl in zip(ft['image'], ft['pupil']):
-                if 'N' in pl:
+                if 'N' in pl.upper():
                     continue
                 region = fits.open(im)['SCI'].header['S_REGION']
                 coords = np.array(region.split('POLYGON ICRS  ')[1].split(' '), dtype = float)
@@ -906,9 +906,11 @@ def get_visit_geoms(table):
     
     return dict(zip(visits, field))
 
-def pick_visit(align_pgon, visit_geoms):
+def pick_visit(align_pgon, visit_geoms, flt_vis_dict):
     if align_pgon is None:
-        #this could still pick a narrowband visit 
+        narrowvis = np.array(list(flt_vis_dict.keys()))[np.array(['N' in i.upper() for i in flt_vis_dict.values()])]
+        for v_ in narrowvis:
+            visit_geoms.pop(v_)
         arg = np.argmax([visit_geoms[i].area for i in visit_geoms.keys()])
         vis = list(visit_geoms.keys())[arg]
 
@@ -1022,7 +1024,7 @@ if __name__ == '__main__':
         align_pgon = None
 
         for i in range(len(subvisits)):
-            vis = pick_visit(align_pgon, visit_geoms)
+            vis = pick_visit(align_pgon, copy.copy(visit_geoms), flt_vis_dict)
             visit_tbl = subtable[subtable['visit'] == vis]
             
             filters = np.unique(visit_tbl['filter']).value
