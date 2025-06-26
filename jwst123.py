@@ -234,9 +234,13 @@ def visit_filter_dict(table):
         tbl = table[table['visit'] == vis]
         net_polygon = []
         filters = np.unique(tbl['filter']).value
+        flt_mask = []
         for filt in filters:
             if 'N' in filt.upper():
+                flt_mask.append(False)
                 continue
+            else:
+                flt_mask.append(True)
             pgons = []
             ft = tbl[tbl['filter'] == filt]
             for im, pl in zip(ft['image'], ft['pupil']):
@@ -251,7 +255,8 @@ def visit_filter_dict(table):
         for pl_ in net_polygon:
             area.append(pl_.area)
 
-        align_filter = filters[np.argmax(area)]
+        #BUG: filters contains narrowbands but area doesnt, they're of different shapes
+        align_filter = filters[flt_mask][np.argmax(area)]
         flt_vis_dict[vis] = align_filter
 
         #implement recursive reordering of visits within a visit if maximum area mosaic doesn't cover all filters
@@ -367,7 +372,7 @@ def generate_level3_mosaic(inputfiles, outdir):
     mosaic_name = f'{outdir_level3}/{filter_name}_i2d.fits'
     return mosaic_name
 
-def create_alignment_mosaic(filter_table, outdir, infilter=None, align_to='gaia', ncores = 10):
+def create_alignment_mosaic(filter_table, outdir, infilter=None, align_to='gaia', ncores = 10, Nbright=800):
     '''
     Create an alignement i2d mosiac from best available
     long wavelength filters or in the given input filter
@@ -437,13 +442,13 @@ def create_alignment_mosaic(filter_table, outdir, infilter=None, align_to='gaia'
 
     #align the mosaic to Gaia
     if align_to=='gaia':
-        align_jwst_image(align_image=mosaic_name, outdir=outdir, gaia=True, photfilename=None)
+        align_jwst_image(align_image=mosaic_name, outdir=outdir, gaia=True, photfilename=None, Nbright=Nbright)
         jh_image = os.path.join(outdir, os.path.basename(mosaic_name).replace('i2d.fits', 'jhat.fits'))
         shutil.move(jh_image, jh_image.replace('jhat.fits', 'jhat_i2d.fits'))
         aligned_mosaic = jh_image.replace('jhat.fits', 'jhat_i2d.fits')
     
     else:
-        align_jwst_image(align_image=mosaic_name, outdir=outdir, gaia=False, photfilename=align_to)
+        align_jwst_image(align_image=mosaic_name, outdir=outdir, gaia=False, photfilename=align_to, Nbright=Nbright)
         jh_image = os.path.join(outdir, os.path.basename(mosaic_name).replace('i2d.fits', 'jhat.fits'))
         shutil.move(jh_image, jh_image.replace('jhat.fits', 'jhat_i2d.fits'))
         aligned_mosaic = jh_image.replace('jhat.fits', 'jhat_i2d.fits')
@@ -909,17 +914,23 @@ def get_visit_geoms(table):
 def pick_visit(align_pgon, visit_geoms, flt_vis_dict):
     if align_pgon is None:
         narrowvis = np.array(list(flt_vis_dict.keys()))[np.array(['N' in i.upper() for i in flt_vis_dict.values()])]
+        #BUG: if there's more than 1 group, it tries to remove those visits too
         for v_ in narrowvis:
-            visit_geoms.pop(v_)
-        arg = np.argmax([visit_geoms[i].area for i in visit_geoms.keys()])
+            if (v_ in list(visit_geoms.keys())) and (len(list(visit_geoms.keys())) > 1):
+                visit_geoms.pop(v_)
+        vis_area = [visit_geoms[i].area for i in visit_geoms.keys()]
+        arg = np.argmax(vis_area)
+        ar_ = vis_area[arg]
+        #BUG: return max area here
         vis = list(visit_geoms.keys())[arg]
 
     else:
         intersect_area = [align_pgon.intersection(visit_geoms[i]).area/visit_geoms[i].area for i in visit_geoms.keys()]
         arg = np.argmax(intersect_area)
+        ar_ = intersect_area[arg]
         vis = list(visit_geoms.keys())[arg]
     
-    return vis
+    return vis, ar_
 
 def update_refcat(mosaic_name, photfile, out_refcat, align_pgon):
     flt = fits.getval(mosaic_name, keyword='FILTER', ext=0)
@@ -1024,7 +1035,8 @@ if __name__ == '__main__':
         align_pgon = None
 
         for i in range(len(subvisits)):
-            vis = pick_visit(align_pgon, copy.copy(visit_geoms), flt_vis_dict)
+            vis, ar_ = pick_visit(align_pgon, copy.copy(visit_geoms), flt_vis_dict)
+            #BUG: get max area from pick_visit to set Nbright
             visit_tbl = subtable[subtable['visit'] == vis]
             
             filters = np.unique(visit_tbl['filter']).value
@@ -1039,11 +1051,16 @@ if __name__ == '__main__':
                                                       ncores=ncores)
 
             else:
+                if ar_ < 0.3:
+                    Nbright = 50000
+                else:
+                    Nbright = 800
                 mosaic_name = create_alignment_mosaic(filter_table, 
                                                       os.path.join(work_dir, 'align', f'group_{g}', f'visit_{vis}'), 
                                                       infilter = infilter, 
                                                       align_to=combined_photfile,
-                                                      ncores=ncores)
+                                                      ncores=ncores,
+                                                      Nbright=Nbright)
                 
             mosaic_photfile = fix_phot(mosaic_name)
             _ = update_refcat(mosaic_name, mosaic_photfile, out_refcat=combined_photfile, align_pgon=align_pgon)
