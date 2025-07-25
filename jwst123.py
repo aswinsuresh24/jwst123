@@ -255,7 +255,6 @@ def visit_filter_dict(table):
         for pl_ in net_polygon:
             area.append(pl_.area)
 
-        #BUG: filters contains narrowbands but area doesnt, they're of different shapes
         align_filter = filters[flt_mask][np.argmax(area)]
         flt_vis_dict[vis] = align_filter
 
@@ -455,126 +454,6 @@ def create_alignment_mosaic(filter_table, outdir, infilter=None, align_to='gaia'
 
     return aligned_mosaic
 
-def apply_nircammask(files):
-    '''
-    Apply nircammask to input files
-    
-    Parameters
-    ----------
-    files : list
-        List of files to apply nircammask to
-        
-    Returns
-    -------
-    None
-    '''
-    cmd = ['nircammask', '-etctime']
-    for fl in files:
-        # cmd += f' {fl}'
-        cmd.append(fl)
-
-    subprocess.run(cmd)  
-
-def calc_sky(files):
-    '''
-    Calculate the sky for input files
-
-    Parameters
-    ----------
-    files : list
-        List of files to calculate the sky for
-
-    Returns
-    -------
-    None
-    '''
-    cmd = 'calcsky {fits_base} {rin} {rout} {step} {sigma_low} {sigma_high}'
-    for fl in files:
-        #read params from options later
-        fits_base = fl.replace('.fits','')
-        print(fits_base)
-        rin = 15
-        rout = 25
-        step = -64
-        sigma_low = 2.25
-        sigma_high = 2.00
-        cmd_fl = cmd.format(fits_base=fits_base,rin=rin,rout=rout,
-                            step=step,sigma_low=sigma_low,sigma_high=sigma_high)
-        subprocess.run(cmd_fl,shell=True)
-
-def generate_dolphot_paramfile(basedir, files = None):
-    '''
-    Generate the dolphot parameter file
-
-    Parameters
-    ----------
-    basedir : str
-        Base directory to search for files
-    files : list
-        List of files to be included in the paramfile
-
-    Returns
-    -------
-    None
-    '''
-    ref_image = glob.glob(basedir + '/*i2d.fits')
-    if len(ref_image) > 1:
-        raise ValueError('More than one i2d image found')
-    
-    ref_image = ref_image[0]
-    if files:
-        phot_images = files
-    else:
-        phot_images = glob.glob(basedir + '/*jhat.fits')
-    phot_image_base = [os.path.basename(r).replace('.fits', '') for r in phot_images]
-    phot_image_det = ['long' if 'long' in get_detector_chip(r) else 'short' for r in phot_images]
-    N_img = len(phot_images)
-    #dolphot can only process n images at a time
-    #write the multiple param files in chunks of n images
-    #with the same reference image
-    paramfiles = []
-    NMAX = 148
-    if N_img > NMAX:
-        N_chunks = int(N_img/NMAX) + 1
-        for i in range(N_chunks):
-            paramfiles.append(f'dolphot_{i}.param')
-            n_file = NMAX if i < N_chunks - 1 else N_img - i*NMAX
-            with open(f'{basedir}/dolphot_{i}.param', 'w') as f:
-                f.write('Nimg = {}\n'.format(n_file))
-                f.write('img0_file = {}\n'.format(os.path.basename(ref_image).replace('.fits', '')))
-
-                for j, (img, det) in enumerate(zip(phot_image_base[i*NMAX:(i+1)*NMAX], phot_image_det[i*NMAX:(i+1)*NMAX])):
-                    f.write('img{}_file = {}\n'.format(j+1, img))
-                    if det == 'short':
-                        for key, val in short_params.items():
-                            f.write('img{}_{} = {}\n'.format(j+1, key, val))
-                    if det == 'long':
-                        for key, val in long_params.items():
-                            f.write('img{}_{} = {}\n'.format(j+1, key, val))
-                    # f.write('\n')
-                for key, val in base_params.items():
-                    f.write('{} = {}\n'.format(key, val))
-
-    else:
-        paramfiles.append(f'dolphot.param')
-        with open(f'{basedir}/dolphot.param', 'w') as f:
-            f.write('Nimg = {}\n'.format(N_img))
-            f.write('img0_file = {}\n'.format(os.path.basename(ref_image).replace('.fits', '')))
-            # f.write('\n')
-            for i, (img, det) in enumerate(zip(phot_image_base, phot_image_det)):
-                f.write('img{}_file = {}\n'.format(i+1, img))
-                if det == 'short':
-                    for key, val in short_params.items():
-                        f.write('img{}_{} = {}\n'.format(i+1, key, val))
-                if det == 'long':
-                    for key, val in long_params.items():
-                        f.write('img{}_{} = {}\n'.format(i+1, key, val))
-                # f.write('\n')
-            for key, val in base_params.items():
-                f.write('{} = {}\n'.format(key, val))
-    
-    return paramfiles
-
 def cut_gaia_sources(image, table_gaia):
     ''''
     Remove Gaia sources that are outside the image
@@ -654,8 +533,7 @@ def query_gaia(image, dr = 'gaiadr3', save_file = False):
     
     return tb_gaia
 
-def calc_dispersion(ref_table, phot_file,
-                     phot_image = False, dist_limit = 1, 
+def calc_dispersion(ref_table, phot_file, w = False, dist_limit = 1, 
                      plot = False):
     '''
     Calculate disperson between JWST sources and a reference catalog
@@ -680,12 +558,10 @@ def calc_dispersion(ref_table, phot_file,
     '''
     jhat_df = pd.read_csv(phot_file, sep = '\s+')    
 
-    if phot_image:
-        hdr = fits.open(phot_image)['SCI'].header
-        w = wcs.WCS(hdr)
+    if w:
         jh_radec = w.all_pix2world(jhat_df['x'], jhat_df['y'], 0)
         jh_ra, jh_dec = np.array(jh_radec[0])*u.degree, np.array(jh_radec[1])*u.degree
-        jh_skycoord = SkyCoord(ra = jh_ra, dec = jh_dec)
+        jh_skycoord = SkyCoord(ra = jh_ra, dec = jh_dec)        
     else:    
         jh_ra, jh_dec = jhat_df['ra'].to_numpy()*u.degree, jhat_df['dec'].to_numpy()*u.degree
         jh_skycoord = SkyCoord(ra = jh_ra, dec = jh_dec)
@@ -735,7 +611,8 @@ def jwst_dispersion(align_image, outdir, photfile=None, gaia=False, plot=False):
 
     os.rename(jhat_image, temp_cal_name)
     align_cat, align_photfile = jwst_phot(temp_cal_name)
-    disp_fn_mean, disp_fn_std = calc_dispersion(refcat, align_photfile, phot_image = phot_image, dist_limit = 0.5, plot = plot)
+    disp_fn_mean, disp_fn_std = calc_dispersion(refcat, align_photfile, w = wcs.WCS(fits.getheader(phot_image, ext=1)),
+                                                dist_limit = 0.5, plot = plot)
     print(f'Final dispersion: {disp_fn_mean*1000} mas')
     os.rename(temp_cal_name, jhat_image)
 
@@ -749,6 +626,27 @@ def jwst_dispersion(align_image, outdir, photfile=None, gaia=False, plot=False):
             filehandle[0].header['JWCAT'] = os.path.basename(photfile)
 
     return disp_fn_mean 
+
+def guess_shift(align_image, ref_table, radius_px = 50):
+    sci_hdr = copy.copy(wcs.WCS(fits.getheader(align_image, ext=1)))
+    align_photfile = fix_phot(align_image)
+    crpix1, crpix2 = sci_hdr.wcs.crpix
+
+    off, xshift, yshift = [], [], []
+    xsh, ysh = np.arange(-radius_px, radius_px+5, 5), np.arange(-radius_px, radius_px+5, 5)
+    for xs in xsh:
+        for ys in ysh:
+            in_wcs = copy.copy(sci_hdr)
+            in_wcs.wcs.crpix = [crpix1+xs, crpix2+ys]
+            disp, _ = calc_dispersion(ref_table, align_photfile, w=in_wcs, dist_limit = 1, plot = False)
+            off.append(disp)
+            xshift.append(xs)
+            yshift.append(ys)
+
+    best_x, best_y = -xshift[np.argmin(off)], -yshift[np.argmin(off)]
+    print(f'Best guess for {align_image}: ({best_x}, {best_y})')
+
+    return best_x, best_y
     
 def run_jhat(align_image, outdir, params, gaia = False, photfilename = None, xshift = 0, yshift = 0, Nbright = 800, verbose = False):
     '''
@@ -832,16 +730,6 @@ def align_jwst_image(align_image, outdir, gaia = False, photfilename = None, xsh
         disp = 99.99
 
     if disp/pixscale > 1:
-        params['iterate_with_xyshifts'] = False
-        try:
-            run_jhat(align_image=align_image, outdir=outdir, params=params, gaia=gaia, photfilename=photfilename, 
-                    xshift=xshift, yshift=yshift, Nbright=Nbright, verbose=verbose)
-            disp = jwst_dispersion(align_image=align_image, outdir=outdir, photfile=photfilename, gaia=gaia, plot=plot)
-        except Exception as e:
-            print(e)
-            disp = 99.99
-
-    if disp/pixscale > 1:
         params = relaxed_gaia_params if gaia else relaxed_jwst_params
         try:
             run_jhat(align_image=align_image, outdir=outdir, params=params, gaia=gaia, photfilename=photfilename, 
@@ -851,10 +739,40 @@ def align_jwst_image(align_image, outdir, gaia = False, photfilename = None, xsh
             print(e)
             disp = 99.99
 
+    if disp/pixscale > 1:
+        if gaia:
+            ref_table = query_gaia(align_image)
+        else:
+            ref_table = Table.read(photfilename, format='ascii')
+        xsh, ysh = guess_shift(align_image, ref_table, radius_px=50)
+        params = relaxed_gaia_params if gaia else relaxed_jwst_params
+        try:
+            run_jhat(align_image=align_image, outdir=outdir, params=params, gaia=gaia, photfilename=photfilename, 
+                    xshift=xsh, yshift=ysh, Nbright=Nbright, verbose=verbose)
+            disp = jwst_dispersion(align_image=align_image, outdir=outdir, photfile=photfilename, gaia=gaia, plot=plot)
+        except Exception as e:
+            print(e)
+            disp = 99.99
+
+    if disp/pixscale > 1:
+        if gaia:
+            ref_table = query_gaia(align_image)
+        else:
+            ref_table = Table.read(photfilename, format='ascii')
+        xsh, ysh = guess_shift(align_image, ref_table, radius_px=100)
+        params = relaxed_gaia_params if gaia else relaxed_jwst_params
+        try:
+            run_jhat(align_image=align_image, outdir=outdir, params=params, gaia=gaia, photfilename=photfilename, 
+                    xshift=xsh, yshift=ysh, Nbright=Nbright, verbose=verbose)
+            disp = jwst_dispersion(align_image=align_image, outdir=outdir, photfile=photfilename, gaia=gaia, plot=plot)
+        except Exception as e:
+            print(e)
+            disp = 99.99
+
     print(f'''Final {'Gaia' if gaia else 'JWST'} dispersion for {align_image}: {disp*1000} mas''')
 
     if disp/pixscale > 1:
-        print('Copying unaligned image to output, redo alignment')
+        print(f'Copying unaligned {align_image} to output, redo alignment')
         if 'cal.fits' in align_image:
             jhat_image = os.path.join(outdir, os.path.basename(align_image.replace('cal.fits', 'jhat.fits')))
         elif 'i2d.fits' in align_image:
@@ -914,14 +832,13 @@ def get_visit_geoms(table):
 def pick_visit(align_pgon, visit_geoms, flt_vis_dict):
     if align_pgon is None:
         narrowvis = np.array(list(flt_vis_dict.keys()))[np.array(['N' in i.upper() for i in flt_vis_dict.values()])]
-        #BUG: if there's more than 1 group, it tries to remove those visits too
+        #BUG: narrowvis could have let narrow band pupils pass through
         for v_ in narrowvis:
             if (v_ in list(visit_geoms.keys())) and (len(list(visit_geoms.keys())) > 1):
                 visit_geoms.pop(v_)
         vis_area = [visit_geoms[i].area for i in visit_geoms.keys()]
         arg = np.argmax(vis_area)
         ar_ = vis_area[arg]
-        #BUG: return max area here
         vis = list(visit_geoms.keys())[arg]
 
     else:
@@ -935,15 +852,16 @@ def pick_visit(align_pgon, visit_geoms, flt_vis_dict):
 def update_refcat(mosaic_name, photfile, out_refcat, align_pgon):
     flt = fits.getval(mosaic_name, keyword='FILTER', ext=0)
     ppl = fits.getval(mosaic_name, keyword='PUPIL', ext=0)
-    if ('N' in flt) or ('N' in ppl):
-        #could be an edge case where a visit overlaps only with another narrowband visit
-        return 0
     
     if not os.path.exists(out_refcat):
         refcat = Table.read(photfile, format='ascii')
         refcat[['ra', 'dec', 'mag', 'dmag']].write(out_refcat, format='ascii', overwrite=True)
 
     else:
+        if ('N' in flt) or ('N' in ppl):
+            #BUG: could be an edge case where a visit overlaps only with another narrowband visit
+            return 0
+        
         mastercat = Table.read(out_refcat, format='ascii')
         refcat = Table.read(photfile, format='ascii')
 
@@ -1036,7 +954,6 @@ if __name__ == '__main__':
 
         for i in range(len(subvisits)):
             vis, ar_ = pick_visit(align_pgon, copy.copy(visit_geoms), flt_vis_dict)
-            #BUG: get max area from pick_visit to set Nbright
             visit_tbl = subtable[subtable['visit'] == vis]
             
             filters = np.unique(visit_tbl['filter']).value
