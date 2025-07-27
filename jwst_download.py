@@ -70,6 +70,8 @@ def query_mast_jwst(coord):
     # Added mask to remove calibration data from search
     masks.append([f.upper()!='DETECTION' for f in obsTable['filters']])
     masks.append([i.upper()!='CALIBRATION' for i in obsTable['intentType']])
+    masks.append([d.upper()=='PUBLIC' for d in obsTable['dataRights']])
+    masks.append([t.upper()=='IMAGE' for t in obsTable['dataproduct_type']])
 
     mask = [all(l) for l in list(map(list, zip(*masks)))]
     obsTable_webb = obsTable[mask]
