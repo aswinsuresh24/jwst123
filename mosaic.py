@@ -726,51 +726,6 @@ def edit_spec_groups(table, spec_group_file):
 
     return table
 
-def mosaic_parallel_worker(subimages, filter_table, bbox, wcs_, 
-                           grp, b, outdir, dolphot_dir):
-    try:
-        box_outdir = os.path.join(outdir, f'ref_{b}')
-        dolphot_outdir = os.path.join(dolphot_dir, f'nircam_{grp}_{b}')
-        if not os.path.exists(box_outdir):
-            os.makedirs(box_outdir)
-
-        if not os.path.exists(dolphot_outdir):
-            os.makedirs(dolphot_outdir)
-
-        minx, maxx = int(np.abs(np.floor(min(bbox.exterior.xy[0])))), int(np.abs(np.ceil(max(bbox.exterior.xy[0]))))
-        miny, maxy = int(np.abs(np.floor(min(bbox.exterior.xy[1])))), int(np.abs(np.ceil(max(bbox.exterior.xy[1]))))
-        wcs_slice = (slice(miny, maxy), slice(minx, maxx))
-        box_wcs = wcs_.slice(wcs_slice)
-        wcs_hdr = box_wcs.to_header()
-        wcs_hdr['NAXIS1'], wcs_hdr['NAXIS2'] = box_wcs._naxis[0], box_wcs._naxis[1] #change to max-min?
-        gwcs_path = create_gwcs(outdir=box_outdir, sci_header=wcs_hdr)
-
-        filter_keys = sorted(filter_table.keys())
-        target_filter = filter_keys[-1]
-
-        copy_files(filter_table, box_outdir)
-        filter_table = update_path(filter_table, box_outdir)
-
-        convolve_images(filter_table, target_filter)
-
-        mosaics = []
-        for flt_key in filter_keys:
-            driz_image = create_coadd_mosaic(filter_table[flt_key], outdir=box_outdir, filt=flt_key, 
-                                            centroid=None, output_shape=None, gwcs_file=gwcs_path)
-            mosaics.append(driz_image)
-
-        coadd_filename = os.path.join(box_outdir, f'coadd_{grp}_{b}_{target_filter}_i2d.fits')
-        coadd(mosaics, target_filter, coadd_filename)
-
-        setup_paramfile(dolphot_outdir, coadd_filename, subimages)
-
-        dolphot_images = glob.glob(os.path.join(dolphot_outdir, '*fits'))
-        apply_nircammask(dolphot_images)
-        calc_sky(dolphot_images)
-    
-    except Exception as e:
-        raise e
-
 if __name__ == '__main__':
     parser = create_parser()
     args = parser.parse_args()
@@ -802,9 +757,41 @@ if __name__ == '__main__':
 
         for b in range(len(split_obs.split_boxes)):
             subimages, filter_table, bbox = split_obs.subimages[b], filter_tables[b], split_obs.split_boxes[b]
-            jobs.append(p.apply_async(mosaic_parallel_worker,
-                                      args=(subimages, filter_table, bbox, wcs_,
-                                            grp, b, outdir, dolphot_dir)))
-        
-    for job in jobs:
-        job.get()
+            box_outdir = os.path.join(outdir, f'ref_{b}')
+            dolphot_outdir = os.path.join(dolphot_dir, f'nircam_{grp}_{b}')
+            if not os.path.exists(box_outdir):
+                os.makedirs(box_outdir) 
+
+            if not os.path.exists(dolphot_outdir):
+                os.makedirs(dolphot_outdir)
+
+            minx, maxx = int(np.abs(np.floor(min(bbox.exterior.xy[0])))), int(np.abs(np.ceil(max(bbox.exterior.xy[0]))))
+            miny, maxy = int(np.abs(np.floor(min(bbox.exterior.xy[1])))), int(np.abs(np.ceil(max(bbox.exterior.xy[1]))))
+            wcs_slice = (slice(miny, maxy), slice(minx, maxx))
+            box_wcs = wcs_.slice(wcs_slice)
+            wcs_hdr = box_wcs.to_header()
+            wcs_hdr['NAXIS1'], wcs_hdr['NAXIS2'] = box_wcs._naxis[0], box_wcs._naxis[1] #change to max-min?
+            gwcs_path = create_gwcs(outdir=box_outdir, sci_header=wcs_hdr)
+
+            filter_keys = sorted(filter_table.keys())
+            target_filter = filter_keys[-1]
+
+            copy_files(filter_table, box_outdir)
+            filter_table = update_path(filter_table, box_outdir)
+
+            convolve_images(filter_table, target_filter)
+
+            mosaics = []
+            for flt_key in filter_keys:
+                driz_image = create_coadd_mosaic(filter_table[flt_key], outdir=box_outdir, filt=flt_key, 
+                                                centroid=None, output_shape=None, gwcs_file=gwcs_path)
+                mosaics.append(driz_image)
+
+            coadd_filename = os.path.join(box_outdir, f'coadd_{grp}_{b}_{target_filter}_i2d.fits')
+            coadd(mosaics, target_filter, coadd_filename)
+
+            setup_paramfile(dolphot_outdir, coadd_filename, subimages)
+
+            dolphot_images = glob.glob(os.path.join(dolphot_outdir, '*fits'))
+            apply_nircammask(dolphot_images)
+            calc_sky(dolphot_images)
