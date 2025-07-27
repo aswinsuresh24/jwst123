@@ -627,13 +627,14 @@ def jwst_dispersion(align_image, outdir, photfile=None, gaia=False, plot=False):
 
     return disp_fn_mean 
 
-def guess_shift(align_image, ref_table, radius_px = 50):
+def guess_shift(align_image, ref_table, radius_px = 50, res = 5,  plot = False):
     sci_hdr = copy.copy(wcs.WCS(fits.getheader(align_image, ext=1)))
     align_photfile = fix_phot(align_image)
     crpix1, crpix2 = sci_hdr.wcs.crpix
 
     off, xshift, yshift = [], [], []
-    xsh, ysh = np.arange(-radius_px, radius_px+5, 5), np.arange(-radius_px, radius_px+5, 5)
+    xsh, ysh = np.arange(-radius_px, radius_px+res, res), np.arange(-radius_px, radius_px+res, res)
+    ng = int(len(xsh))
     for xs in xsh:
         for ys in ysh:
             in_wcs = copy.copy(sci_hdr)
@@ -645,6 +646,34 @@ def guess_shift(align_image, ref_table, radius_px = 50):
 
     best_x, best_y = -xshift[np.argmin(off)], -yshift[np.argmin(off)]
     print(f'Best guess for {align_image}: ({best_x}, {best_y})')
+
+    if plot:
+        fig, ax = plt.subplots(1, 3, figsize = (24, 6))
+        ax[0].scatter(np.array(xshift), np.array(off), s = 5)
+        ax[0].grid(linestyle = '--', alpha = 0.5)
+        ax[0].set_xlabel('XSHIFT')
+        ax[0].set_ylabel('Offset (arcsec)')
+
+        ax[1].scatter(np.array(yshift), np.array(off), s = 5)
+        ax[1].grid(linestyle = '--', alpha = 0.5)
+        ax[1].set_xlabel('YSHIFT')
+        ax[1].set_ylabel('Offset (arcsec)')
+
+        def fmt(x):
+            s = f"{x*100:.1f}"
+            if s.endswith("0"):
+                s = f"{x*100:.0f}"
+            return rf"{s} \%" if plt.rcParams["text.usetex"] else f"{s} %"
+        
+        im = ax[2].imshow(np.array(off).reshape(ng,ng).T)
+        cs = ax[2].contour(np.arange(0, ng, 1), np.arange(0, ng, 1), np.array(off).reshape(ng, ng).T, colors='white', levels = 3);
+        ax[2].clabel(cs, cs.levels, fmt=fmt, fontsize=9)
+        fig.colorbar(im, ax=ax[2], pad = 0.02)
+        ax[2].set_xticks(np.linspace(0, ng-1, 8), np.round(np.linspace(-radius_px, radius_px, 8)))
+        ax[2].set_yticks(np.linspace(0, ng-1, 8), np.round(np.linspace(-radius_px, radius_px, 8)))
+        ax[2].set_xlabel('XSHIFT')
+        ax[2].set_ylabel('YSHIFT')
+        plt.show()
 
     return best_x, best_y
     
@@ -705,8 +734,7 @@ def run_jhat(align_image, outdir, params, gaia = False, photfilename = None, xsh
 def align_jwst_image(align_image, outdir, gaia = False, photfilename = None, xshift = 0, yshift = 0, Nbright = 800, verbose = False, plot = False):
     print(f"Aligning {os.path.basename(align_image)} to {'Gaia' if gaia else 'JWST'}")
     params = strict_gaia_params if gaia else strict_jwst_params
-    if plot:
-        params['showplots'] = 2
+    if plot: params['showplots'] = 2
         
     try:
         pixscale = np.abs(fits.getval(align_image, 'CDELT1', ext=1)*3600)
@@ -731,6 +759,7 @@ def align_jwst_image(align_image, outdir, gaia = False, photfilename = None, xsh
 
     if disp/pixscale > 1:
         params = relaxed_gaia_params if gaia else relaxed_jwst_params
+        if plot: params['showplots'] = 2 
         try:
             run_jhat(align_image=align_image, outdir=outdir, params=params, gaia=gaia, photfilename=photfilename, 
                     xshift=xshift, yshift=yshift, Nbright=Nbright, verbose=verbose)
@@ -744,8 +773,7 @@ def align_jwst_image(align_image, outdir, gaia = False, photfilename = None, xsh
             ref_table = query_gaia(align_image)
         else:
             ref_table = Table.read(photfilename, format='ascii')
-        xsh, ysh = guess_shift(align_image, ref_table, radius_px=50)
-        params = relaxed_gaia_params if gaia else relaxed_jwst_params
+        xsh, ysh = guess_shift(align_image, ref_table, radius_px=50, res=5, plot=plot)
         try:
             run_jhat(align_image=align_image, outdir=outdir, params=params, gaia=gaia, photfilename=photfilename, 
                     xshift=xsh, yshift=ysh, Nbright=Nbright, verbose=verbose)
@@ -759,8 +787,7 @@ def align_jwst_image(align_image, outdir, gaia = False, photfilename = None, xsh
             ref_table = query_gaia(align_image)
         else:
             ref_table = Table.read(photfilename, format='ascii')
-        xsh, ysh = guess_shift(align_image, ref_table, radius_px=100)
-        params = relaxed_gaia_params if gaia else relaxed_jwst_params
+        xsh, ysh = guess_shift(align_image, ref_table, radius_px=100, res=5, plot=plot)
         try:
             run_jhat(align_image=align_image, outdir=outdir, params=params, gaia=gaia, photfilename=photfilename, 
                     xshift=xsh, yshift=ysh, Nbright=Nbright, verbose=verbose)
