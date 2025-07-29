@@ -781,7 +781,12 @@ def align_jwst_image(align_image, outdir, gaia = False, photfilename = None, xsh
                 yshift=yshift, 
                 Nbright=Nbright, 
                 verbose=verbose)
-        disp_in_mu, disp_in_med, disp_fn_mu, disp_fn_med = jwst_dispersion(align_image=align_image, outdir=outdir, photfile=photfilename, gaia=gaia, plot=plot, sig=sig)
+        disp_in_mu, disp_in_med, disp_fn_mu, disp_fn_med = jwst_dispersion(align_image=align_image, 
+                                                                           outdir=outdir, 
+                                                                           photfile=photfilename, 
+                                                                           gaia=gaia, 
+                                                                           plot=plot, 
+                                                                           sig=sig)
         guess_offset = (0, 0)
     except Exception as e:
         print(traceback.format_exc())
@@ -793,23 +798,10 @@ def align_jwst_image(align_image, outdir, gaia = False, photfilename = None, xsh
         try:
             run_jhat(align_image=align_image, outdir=outdir, params=params, gaia=gaia, photfilename=photfilename, 
                     xshift=xshift, yshift=yshift, Nbright=Nbright, verbose=verbose)
-            disp_in_mu, disp_in_med, disp_fn_mu, disp_fn_med = jwst_dispersion(align_image=align_image, outdir=outdir, photfile=photfilename, gaia=gaia, plot=plot, sig=sig)
+            disp_in_mu, disp_in_med, disp_fn_mu, disp_fn_med = jwst_dispersion(align_image=align_image, outdir=outdir, 
+                                                                               photfile=photfilename, gaia=gaia, plot=plot, 
+                                                                               sig=1)
             guess_offset = (0, 0)
-        except Exception as e:
-            print(traceback.format_exc())
-            disp_fn_med = 99.99
-
-    if disp_fn_med/pixscale > 1:
-        if gaia:
-            ref_table = query_gaia(align_image)
-        else:
-            ref_table = Table.read(photfilename, format='ascii')
-        xsh, ysh = guess_shift(align_image, ref_table, radius_px=50, res=4, sig=sig, plot=plot)
-        try:
-            run_jhat(align_image=align_image, outdir=outdir, params=params, gaia=gaia, photfilename=photfilename, 
-                    xshift=xsh, yshift=ysh, Nbright=Nbright, verbose=verbose)
-            disp_in_mu, disp_in_med, disp_fn_mu, disp_fn_med = jwst_dispersion(align_image=align_image, outdir=outdir, photfile=photfilename, gaia=gaia, plot=plot, sig=sig)
-            guess_offset = (xsh*factor, ysh*factor)
         except Exception as e:
             print(traceback.format_exc())
             disp_fn_med = 99.99
@@ -823,7 +815,9 @@ def align_jwst_image(align_image, outdir, gaia = False, photfilename = None, xsh
         try:
             run_jhat(align_image=align_image, outdir=outdir, params=params, gaia=gaia, photfilename=photfilename, 
                     xshift=xsh, yshift=ysh, Nbright=Nbright, verbose=verbose)
-            disp_in_mu, disp_in_med, disp_fn_mu, disp_fn_med = jwst_dispersion(align_image=align_image, outdir=outdir, photfile=photfilename, gaia=gaia, plot=plot, sig=1)
+            disp_in_mu, disp_in_med, disp_fn_mu, disp_fn_med = jwst_dispersion(align_image=align_image, outdir=outdir, 
+                                                                               photfile=photfilename, gaia=gaia, plot=plot, 
+                                                                               sig=1)
             guess_offset = (xsh*factor, ysh*factor)
         except Exception as e:
             print(traceback.format_exc())
