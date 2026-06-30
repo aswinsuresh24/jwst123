@@ -64,7 +64,7 @@ def query_mast_jwst(coord):
     masks.append([t.upper()=='JWST' for t in obsTable['obs_collection']]) #JWST images
     masks.append([any(l) for l in list(map(list,zip(*[[det in inst.upper() #NIRCAM images
                 for inst in obsTable['instrument_name']]
-                for det in ['NIRCAM']])))])
+                for det in ['MIRI']])))])
 
     #add mask to remove entries with 1. null jpegURL/dataURL 2. private data rights(?)
     # Added mask to remove calibration data from search
