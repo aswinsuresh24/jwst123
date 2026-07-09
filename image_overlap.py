@@ -43,8 +43,7 @@ class SRegionPolygon:
         values = [float(token) for token in tokens[2:]]
         if len(values) % 2:
             raise ValueError(f"S_REGION has an odd number of coordinate values: {s_region!r}")
-        vertices = np.asarray(values, dtype=float).reshape(-1, 2)
-        return cls(frame=frame, vertices=vertices)
+        vertices = np.asarray(values, dtype=float).reshape(-1, 2)        return cls(frame=frame, vertices=vertices)
 
     def to_string(self, precision: int = 9) -> str:
         coord_text = " ".join(
@@ -57,22 +56,58 @@ class SRegionPolygon:
 
 refs = glob.glob('group_*/ref_*/coadd*i2d.fits')
 
-images = glob.glob('F560W*/mastDownload/JWST/*_mirimage/*_cal.fits')
+def all_miri_images(images):
+    f = open('image_data_maximized_pt2', 'w')
+    
+    for image in images:
+        s_region_polygon, region_mask, wcs, header, data, _ = illuminated_s_region.illuminated_s_region_from_fits(image)
+	#print(s_region_polygon) 
 
-for image in images:
-    s_region_polygon, region_mask, wcs, header, data, _ = illuminated_s_region.illuminated_s_region_from_fits(image)
-    #print(s_region_polygon)
-    for ref in refs:
-        with fits.open(ref) as hdu:
-            header = hdu['SCI'].header
-            original_s_region = SRegionPolygon.parse(header["S_REGION"])
+        ## defining 'best' variables
+        best_ref = None
+        best_overlap = 0.0
+        
+        for ref in refs:
+            with fits.open(ref) as hdu:
+                header = hdu['SCI'].header
+                original_s_region = SRegionPolygon.parse(header["S_REGION"])
             
-            poly1 = s_region_polygon.to_pixel_polygon(wcs)
-            poly2 = original_s_region.to_pixel_polygon(wcs)
-            #print(poly1, poly2)
+                poly1 = s_region_polygon.to_pixel_polygon(wcs)        ## move outside this for loop?
+                poly2 = original_s_region.to_pixel_polygon(wcs)
+                #print(poly1, poly2)
+                
+                try:
+                    overlap = poly1.intersection(poly2)
 
-            overlap = poly1.intersection(poly2)
-            print(overlap, overlap.area)
-            print(image, ref)
-            print()
+                    if overlap.is_empty or overlap.area == 0:
+                        continue
 
+                    #f.write(f'{image} {ref} \n')
+                    #f.write(f'{overlap} {overlap.area} \n')
+                    #f.write('\n')
+                    
+                    #print(image, ref)
+                    #print(overlap, overlap.area)
+                    #print()
+
+                    # selecting single best reference image w/ max overlap 
+                    if overlap.area > best_overlap:
+                        best_overlap = overlap.area
+                        best_ref = ref
+
+                except:
+                    f.write(f'{image} {ref} \n')
+                    f.write(f'image failed \n')
+                    f.write('\n')
+                    
+                    #print("image failed")
+                    #print(image, ref)
+
+        f.write(f'Overlap maximized: MIRI image: {image}, Reference image: {best_ref}, Max overlap area: {best_overlap}\n\n')
+        #print(f'Overlap maximized: MIRI image: {image}, Reference image: {best_ref}, Max overlap area: {best_overlap}')
+
+    f.close()
+
+images = glob.glob('jwst_data_M51/M51/*/mastDownload/JWST/*_mirimage/*_cal.fits')
+
+all_miri_images(images)
