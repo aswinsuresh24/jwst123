@@ -1,13 +1,13 @@
-import warnings
-warnings.filterwarnings('ignore')
-import glob
-import sys
-import os
 import argparse
-import astropy.wcs as wcs
-import numpy as np
+import os
+import sys
 from contextlib import contextmanager
+
 from astropy import units as u
+
+from common.mast import download_jwst_observations, query_jwst
+from common.Util import parse_coord
+
 
 @contextmanager
 def suppress_stdout():
@@ -22,9 +22,6 @@ def suppress_stdout():
             sys.stdout = old_stdout
             sys.stderr = old_stderr
 
-with suppress_stdout():
-    from astroquery.mast import Observations
-    from astropy.coordinates import SkyCoord
 
 def create_parser():
     '''
@@ -38,12 +35,47 @@ def create_parser():
     parser = argparse.ArgumentParser(description='Download JWST data')
     parser.add_argument('--ra', type=str, help='RA of the target', required=True)
     parser.add_argument('--dec', type=str, help='DEC of the target', required=True)
-    parser.add_argument('--obj', type=str, help='Name of the object', required=True)  
-    parser.add_argument('--radius', type=float, default = 3.0, help='Radius in arcminutes')
-    parser.add_argument('--stage', type=int, default = 2, help='Stage of the reduction')
+    parser.add_argument('--obj', type=str, help='Name of the object', required=True)
+    parser.add_argument(
+        '--outdir',
+        default=None,
+        type=str,
+        help='Output directory for downloads (default: jwst_data/<obj>).',
+    )
+    parser.add_argument('--radius', type=float, default=3.0, help='Radius in arcminutes')
+    parser.add_argument('--stage', type=int, default=2, help='Stage of the reduction')
+    parser.add_argument(
+        '--token',
+        default=None,
+        type=str,
+        help='MAST authorization token for proprietary data '
+             '(see https://auth.mast.stsci.edu/info).',
+    )
     return parser
 
-def query_mast_jwst(coord):
+
+def resolve_outdir(obj, outdir=None):
+    '''
+    Resolve the download output directory.
+
+    Parameters:
+    ----------
+    obj : str
+        Object name used for the default path
+    outdir : str or None
+        Explicit output directory. If None, uses ``jwst_data/<obj>``.
+
+    Returns:
+    -------
+    str
+        Absolute or relative output directory path
+    '''
+    if outdir is None:
+        outdir = os.path.join('jwst_data', obj)
+    return outdir
+
+
+def query_mast_jwst(coord, outdir, radius, stage=2, token=None):
     '''
     Download available data from MAST for JWST NIRCAM
 
@@ -51,62 +83,38 @@ def query_mast_jwst(coord):
     ----------
     coord : astropy.coordinates.SkyCoord
         target coordinates
+    outdir : str
+        output directory for downloads
+    radius : astropy.units.Quantity
+        search radius
+    stage : int
+        JWST calibration stage (2=CAL, 3=I2D)
+    token : str or None
+        Optional MAST API token. When set, authenticates via
+        ``Observations.login`` and includes proprietary observations.
 
     Returns:
     -------
     None
     '''
-    obsTable = Observations.query_region(coord, radius=radius)
-    obsTable = obsTable.filled()
+    os.makedirs(outdir, exist_ok=True)
+    obs_table = query_jwst(coord, radius=radius, token=token)
+    # Session from mast_login persists; no need to pass token again for download.
+    download_jwst_observations(obs_table, outdir=outdir, stage=stage)
 
-    #obsTable masks
-    masks = []
-    masks.append([t.upper()=='JWST' for t in obsTable['obs_collection']]) #JWST images
-    masks.append([any(l) for l in list(map(list,zip(*[[det in inst.upper() #NIRCAM images
-                for inst in obsTable['instrument_name']]
-                for det in ['NIRCAM']])))])
-
-    #add mask to remove entries with 1. null jpegURL/dataURL 2. private data rights(?)
-    # Added mask to remove calibration data from search
-    masks.append([f.upper()!='DETECTION' for f in obsTable['filters']])
-    masks.append([i.upper()!='CALIBRATION' for i in obsTable['intentType']])
-    masks.append([d.upper()=='PUBLIC' for d in obsTable['dataRights']])
-    masks.append([t.upper()=='IMAGE' for t in obsTable['dataproduct_type']])
-
-    mask = [all(l) for l in list(map(list, zip(*masks)))]
-    obsTable_webb = obsTable[mask]
-
-    for obs in obsTable_webb:
-        filt, obsid = obs['filters'], obs['obsid']
-        filt = filt.replace(';', '_')
-        productList = Observations.get_product_list(obs)
-        #product list masks
-        productmasks = []
-        productmasks.append([p.upper() == 'SCIENCE' for p in productList['productType']])
-        if stage == 2:
-            productmasks.append([t == 'CAL' for t in productList['productSubGroupDescription']])
-            productmasks.append([c == 2 for c in productList['calib_level']])
-        if stage == 3:
-            productmasks.append([t == 'I2D' for t in productList['productSubGroupDescription']])
-            productmasks.append([c == 3 for c in productList['calib_level']])
-
-
-        productmask = [all(l) for l in list(map(list, zip(*productmasks)))]
-        productList = productList[productmask]
-        if len(productList) == 0:
-            continue
-        os.makedirs(f'jwst_data/{obj}/{filt}_{obsid}', exist_ok=True)
-        download_dir = f'jwst_data/{obj}/{filt}_{obsid}'
-        Observations.download_products(productList, download_dir=download_dir, extension='fits')
 
 if __name__ == '__main__':
     parser = create_parser()
     args = parser.parse_args()
-    ra, dec, radius = args.ra, args.dec, args.radius*u.arcmin
-    obj = args.obj
-    stage = args.stage
+    coord = parse_coord(args.ra, args.dec)
+    if coord is None:
+        sys.exit(1)
 
-    os.makedirs(f'jwst_data/{obj}', exist_ok=True)
-
-    coord = SkyCoord(ra, dec, frame = 'icrs', unit = 'deg')
-    query_mast_jwst(coord)
+    outdir = resolve_outdir(args.obj, outdir=args.outdir)
+    query_mast_jwst(
+        coord,
+        outdir=outdir,
+        radius=args.radius * u.arcmin,
+        stage=args.stage,
+        token=args.token,
+    )

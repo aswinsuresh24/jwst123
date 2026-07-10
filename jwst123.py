@@ -488,7 +488,7 @@ def cut_gaia_sources(image, table_gaia):
 
     return table_gaia[mask]
 
-def query_gaia(image, dr = 'gaiadr3', save_file = False):
+def query_gaia(image, dr='gaiadr3', telescope='jwst', save_file=False):
     '''
     Query Gaia for sources in the image
 
@@ -498,6 +498,8 @@ def query_gaia(image, dr = 'gaiadr3', save_file = False):
         Image file name
     dr : str
         Gaia data release
+    telescope : str
+        'jwst' uses ImageModel WCS; 'hst' uses the SCI WCS
     save_file : str
         File name to save the Gaia query to
 
@@ -507,38 +509,102 @@ def query_gaia(image, dr = 'gaiadr3', save_file = False):
         Gaia table
     '''
     im = fits.open(image)
-
     hdr = im['SCI'].header
     nx = hdr['NAXIS1']
     ny = hdr['NAXIS2']
 
-    image_model = ImageModel(im)
-    
-    #find radius of query region usinng image header
-    ra0,dec0 = image_model.meta.wcs(nx/2.0-1,ny/2.0-1)
-    coord0 = SkyCoord(ra0,dec0,unit=(u.deg, u.deg), frame='icrs')
-    radius_deg = []
-    for x in [0,nx-1]:        
-        for y in [0,ny-1]:     
-            ra,dec = image_model.meta.wcs(x,y)
-            radius_deg.append(coord0.separation(SkyCoord(ra,dec,unit=(u.deg, u.deg), frame='icrs')).deg)
-    radius_deg = np.amax(radius_deg)*1.1
+    if telescope == 'jwst':
+        image_model = ImageModel(im)
+        ra0, dec0 = image_model.meta.wcs(nx / 2.0 - 1, ny / 2.0 - 1)
 
-    #query gaia
-    query ="SELECT * FROM {}.gaia_source WHERE CONTAINS(POINT('ICRS',\
-            {}.gaia_source.ra,{}.gaia_source.dec),\
-            CIRCLE('ICRS',{},{} ,{}))=1;".format(dr,dr,dr,ra0,dec0,radius_deg)
+        def pix_to_world(x, y):
+            return image_model.meta.wcs(x, y)
+    elif telescope == 'hst':
+        w = wcs.WCS(hdr)
+        ra0, dec0 = w.pixel_to_world_values(nx / 2.0 - 1, ny / 2.0 - 1)
+
+        def pix_to_world(x, y):
+            return w.pixel_to_world_values(x, y)
+    else:
+        raise ValueError(f'Unsupported telescope: {telescope}')
+
+    coord0 = SkyCoord(ra0, dec0, unit=(u.deg, u.deg), frame='icrs')
+    radius_deg = []
+    for x in [0, nx - 1]:
+        for y in [0, ny - 1]:
+            ra, dec = pix_to_world(x, y)
+            radius_deg.append(
+                coord0.separation(SkyCoord(ra, dec, unit=(u.deg, u.deg), frame='icrs')).deg
+            )
+    radius_deg = np.amax(radius_deg) * 1.1
+
+    query = (
+        "SELECT * FROM {}.gaia_source WHERE CONTAINS(POINT('ICRS',"
+        "{}.gaia_source.ra,{}.gaia_source.dec),"
+        "CIRCLE('ICRS',{},{} ,{}))=1;".format(dr, dr, dr, ra0, dec0, radius_deg)
+    )
 
     job5 = Gaia.launch_job_async(query)
-    tb_gaia = job5.get_results() 
+    tb_gaia = job5.get_results()
+    if 'pmra' in tb_gaia.colnames and 'pmdec' in tb_gaia.colnames:
+        tb_gaia['pm/pmerr'] = (
+            (tb_gaia['pmra'] ** 2 + tb_gaia['pmdec'] ** 2)
+            / (tb_gaia['pmra_error'] ** 2 + tb_gaia['pmdec_error'] ** 2)
+        )
     tb_gaia = cut_gaia_sources(image, tb_gaia)
-    print("Number of Gaia stars:",len(tb_gaia))
-    
+    print("Number of Gaia stars:", len(tb_gaia))
+
     if save_file:
         print(f'Saving Gaia query to {save_file}')
-        np.savetxt(save_file, np.array(tb_gaia[['ra', 'dec']]), fmt = '%s')
-    
+        np.savetxt(save_file, np.array(tb_gaia[['ra', 'dec']]), fmt='%s')
+
     return tb_gaia
+
+
+def expand_mask(mask, size=40, mask_shape='square'):
+    """Expand a binary mask with square or circular dilation."""
+    from scipy.ndimage import binary_dilation
+
+    binary_mask = (mask == 1)
+    if mask_shape == 'square':
+        structuring_element = np.ones((size, size), dtype=bool)
+    elif mask_shape == 'circle':
+        y, x = np.ogrid[:size, :size]
+        center = (size - 1) / 2
+        structuring_element = (x - center) ** 2 + (y - center) ** 2 <= center ** 2
+    else:
+        raise ValueError(f'Unsupported mask_shape: {mask_shape}')
+
+    expanded_mask = binary_dilation(binary_mask, structure=structuring_element)
+    return np.where(expanded_mask, 1, mask)
+
+
+def add_bin_dq(filename, outfile=None, mask_shape='circle'):
+    """
+    Build an expanded binary DQ mask extension and write a ``*_masked.fits`` file.
+
+    Flags 1/2/3 are treated as keep; all other DQ values are expanded and masked.
+    """
+    im = fits.open(filename)
+    dq_mask = copy.deepcopy(im['DQ'].data)
+
+    flag_sat = (dq_mask != 1) & (dq_mask != 2) & (dq_mask != 3)
+    dq_mask[flag_sat] = 10
+    dq_mask[~flag_sat] = 1
+
+    expmask = expand_mask(dq_mask, mask_shape=mask_shape)
+    expmask = np.where(expmask == 10, False, True)
+
+    data, hdr = fits.getdata(filename, ext=3, header=True)
+    hdr['EXTNAME'] = 'BIN_DQ'
+    image_hdu = fits.ImageHDU(data=expmask.astype(np.uint8), name='BIN_DQ', header=hdr)
+    im.insert(8, image_hdu)
+
+    if outfile is None:
+        outfile = filename.replace('.fits', '_masked.fits')
+    im.writeto(outfile, overwrite=True)
+    im.close()
+    return outfile
 
 def calc_dispersion(ref_table, phot_file, w = False, dist_limit = 1, sig=2,
                      plot = False):

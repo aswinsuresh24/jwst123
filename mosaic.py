@@ -36,6 +36,7 @@ from astropy.convolution import convolve, convolve_fft
 from reproject.mosaicking import find_optimal_celestial_wcs
 import subprocess
 from nbutils import get_detector_chip
+from common.mast import parse_s_region
 
 from nircam_settings import *
 
@@ -101,9 +102,8 @@ class split_observations(object):
         pgons, centroids = [], []
         for im in table['image']:
             region = fits.open(im)['SCI'].header['S_REGION']
-            coords = np.array(region.split('POLYGON ICRS  ')[1].split(' '), dtype = float)
-            coords = coords.reshape(4, 2)
-            x, y = wcs_opt.all_world2pix(coords[:, 0], coords[:, 1], 0)
+            sky = np.asarray(parse_s_region(region).exterior.coords[:-1])
+            x, y = wcs_opt.all_world2pix(sky[:, 0], sky[:, 1], 0)
             xy_coords = np.column_stack((x, y))
             pgons.append(shapely.Polygon(xy_coords))
             centroids.append(shapely.Polygon(xy_coords).centroid)
@@ -291,9 +291,8 @@ def get_pgons(table):
     pgons, centroids = [], []
     for im in table['image']:
         region = fits.open(im)['SCI'].header['S_REGION']
-        coords = np.array(region.split('POLYGON ICRS  ')[1].split(' '), dtype = float)
-        coords = coords.reshape(4, 2)
-        x, y = wcs_opt.all_world2pix(coords[:, 0], coords[:, 1], 0)
+        sky = np.asarray(parse_s_region(region).exterior.coords[:-1])
+        x, y = wcs_opt.all_world2pix(sky[:, 0], sky[:, 1], 0)
         xy_coords = np.column_stack((x, y))
         pgons.append(shapely.Polygon(xy_coords))
         centroids.append(shapely.Polygon(xy_coords).centroid)

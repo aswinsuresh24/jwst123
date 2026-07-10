@@ -32,6 +32,7 @@ from common import Constants
 from common import Options
 from common import Settings
 from common import Util
+from common.mast import parse_s_region
 
 acceptable_filters = [
     'F220W','F250W','F330W','F344N','F435W','F475W','F550M','F555W',
@@ -325,12 +326,8 @@ def get_sky_pgons(table):
     pgons = []
     for im in table['image']:
         region = fits.open(im)['SCI'].header['S_REGION']
-        coords = np.array(region.split('POLYGON ICRS  ')[1].split(' '), dtype = float)
-        coords = coords.reshape(4, 2)
-        pgons.append(shapely.Polygon(coords))
-    pgons= np.array(pgons)
-
-    return pgons
+        pgons.append(parse_s_region(region))
+    return np.array(pgons, dtype=object)
 
 def edit_visits_groups(table):
     unique_visits = np.unique(table['visit'])
