@@ -1,3 +1,9 @@
+# Legacy pinned requirements for an older Python 3.10 HST-only stack.
+# Prefer environment.yaml + `pip install -e .` (see README.md / pyproject.toml).
+#
+# These pins fail on Python 3.12 (astropy 5.3.3 builds from source against
+# modern setuptools). Kept only for historical reference.
+
 astropy==5.3.3
 astroquery==0.4.6
 astroscrappy==1.1.0

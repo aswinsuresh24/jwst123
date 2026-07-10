@@ -546,7 +546,8 @@ def query_gaia(image, dr='gaiadr3', telescope='jwst', save_file=False):
 
     job5 = Gaia.launch_job_async(query)
     tb_gaia = job5.get_results()
-    if 'pmra' in tb_gaia.colnames and 'pmdec' in tb_gaia.colnames:
+    pm_cols = ('pmra', 'pmdec', 'pmra_error', 'pmdec_error')
+    if all(col in tb_gaia.colnames for col in pm_cols):
         tb_gaia['pm/pmerr'] = (
             (tb_gaia['pmra'] ** 2 + tb_gaia['pmdec'] ** 2)
             / (tb_gaia['pmra_error'] ** 2 + tb_gaia['pmdec_error'] ** 2)

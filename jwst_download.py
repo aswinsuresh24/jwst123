@@ -103,12 +103,12 @@ def query_mast_jwst(coord, outdir, radius, stage=2, token=None):
     download_jwst_observations(obs_table, outdir=outdir, stage=stage)
 
 
-if __name__ == '__main__':
+def main(argv=None):
     parser = create_parser()
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     coord = parse_coord(args.ra, args.dec)
     if coord is None:
-        sys.exit(1)
+        return 1
 
     outdir = resolve_outdir(args.obj, outdir=args.outdir)
     query_mast_jwst(
@@ -118,3 +118,8 @@ if __name__ == '__main__':
         stage=args.stage,
         token=args.token,
     )
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

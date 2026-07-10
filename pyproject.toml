@@ -1,0 +1,88 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jwst123"
+version = "0.1.0"
+description = "JWST NIRCam download, JHAT alignment, mosaicking, and DOLPHOT helpers (with legacy HST support)."
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+license = { text = "MIT" }
+authors = [
+    { name = "Charlie Kilpatrick" },
+    { name = "Aswin Suresh" },
+]
+keywords = [
+    "astronomy",
+    "jwst",
+    "nircam",
+    "hst",
+    "mast",
+    "photometry",
+    "dolphot",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Astronomy",
+]
+dependencies = [
+    "numpy>=1.25,<2",
+    "scipy>=1.14",
+    "astropy>=5.3.4",
+    "astroquery>=0.4.6",
+    "astroscrappy>=1.1.0",
+    "matplotlib",
+    "pandas",
+    "shapely",
+    "scikit-image",
+    "tqdm",
+    "requests",
+    "python-dateutil",
+    "progressbar33",
+    "ccdproc",
+    "reproject",
+    "photutils",
+    "jwst>=1.17,<2",
+    "jhat",
+    "drizzlepac",
+    "stwcs",
+    "stpsf",
+    "tables",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ipython",
+    "jupyter",
+    "pytest",
+]
+
+[project.urls]
+Homepage = "https://github.com/charliekilpatrick/jwst-nircam"
+Repository = "https://github.com/charliekilpatrick/jwst-nircam"
+
+[project.scripts]
+jwst-download = "jwst_download:main"
+jwst123-link = "link:main"
+
+[tool.setuptools]
+include-package-data = true
+py-modules = [
+    "jwst123",
+    "jwst_download",
+    "mosaic",
+    "nbutils",
+    "nircam_settings",
+    "link",
+    "rsg_cat",
+    "hst123",
+]
+
+[tool.setuptools.packages.find]
+include = ["common*"]

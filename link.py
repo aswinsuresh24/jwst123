@@ -65,15 +65,20 @@ def remove_proc_files(files, dir):
 
     return new_files
 
-if __name__ == '__main__':
+def main(argv=None):
     parser = create_parser()
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     # Create symlinks
-    files = glob.glob(os.path.join(args.datadir, '**', '*.fits'), recursive = True)
+    files = glob.glob(os.path.join(args.datadir, '**', '*.fits'), recursive=True)
     for procdir in args.proc_dirs:
         files = remove_proc_files(files, procdir)
     print(f'Creating symlinks for {len(files)} files')
     for file in files:
         fl_dst = os.path.join(args.symlinkdir, 'raw', os.path.basename(file))
         create_symlink(file, fl_dst)
+    return 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

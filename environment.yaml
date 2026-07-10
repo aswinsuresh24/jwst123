@@ -3,6 +3,7 @@
 # Create and activate:
 #   conda env create -f environment.yaml
 #   conda activate jwst123
+#   pip install -e .
 #
 # Why not `pip install -r requirements.txt`?
 # - requirements.txt pins packages from the Python 3.10 era (numpy 1.24, astropy 5.3.3).
