@@ -34,7 +34,7 @@ from jwst.associations import asn_from_list
 from jwst.associations.lib.rules_level3_base import DMS_Level3_Base
 from jwst.pipeline import calwebb_image3
 import jhat
-from jhat import jwst_photclass,st_wcs_align
+from jhat import hst_photclass, jwst_photclass,st_wcs_align
 import subprocess
 from nbutils import input_list
 from jwst.datamodels import ImageModel
@@ -48,6 +48,8 @@ from common import Settings
 from common import Util
 from nircam_settings import *
 from nbutils import input_list, xmatch_common, get_detector_chip, create_filter_table
+from jwst_download import query_mast_jwst
+from link import create_symlink
 
 @contextmanager
 def suppress_stdout():
@@ -85,6 +87,9 @@ def create_parser():
     parser.add_argument('--workdir', type=str, default='.', help='Root directory to search for data')
     parser.add_argument('--object', type=str, default='m92', help='Object to reduce')
     parser.add_argument('--ncores', type=int, default=1, help='Number of CPU cores')
+    parser.add_argument('--ra', type=float, defult=None, help='RA of the target in deg')
+    parser.add_argument('--dec', type=float, default=None, help='Dec of the target in deg')
+    parser.add_argument('--radius', type=float, default=5.0, help='Query radius in arcmin')
     return parser
 
 def mp_init(init_success: int = 0,
@@ -319,6 +324,30 @@ def jwst_phot(phot_img):
     refcat = Table.read(photfilename,format='ascii')
     return refcat, photfilename
 
+def hst_phot(phot_img):
+    '''
+    Run photometry using jhat hst_photclass
+
+    Parameters
+    ----------
+    phot_img : str
+        Photometry image/
+
+    Returns
+    -------
+    refcat : astropy.table.Table
+        Reference catalog
+    photfilename : str
+        Photometry file name
+    '''
+    hst_phot = hst_photclass()
+    photfilename = phot_img.replace('.fits','.phot.txt')
+    hst_phot.run_phot(imagename=phot_img,
+                      photfilename=photfilename,
+                      overwrite=True,
+                      ee_radius=70)
+    refcat = Table.read(photfilename,format='ascii')
+    return refcat, photfilename
 
 def generate_level3_mosaic(inputfiles, outdir):
     '''
@@ -822,8 +851,9 @@ def align_jwst_image(align_image, outdir, gaia = False, photfilename = None, xsh
         except Exception as e:
             print(traceback.format_exc())
             disp_fn_med = 99.99
+            disp_in_mu, disp_in_med = 99.99, 99.99
 
-    print(f'''Final {'Gaia' if gaia else 'JWST'} dispersion for {align_image}: {disp_fn_mu*1000} mas''')
+    print(f'''Final {'Gaia' if gaia else 'JWST'} dispersion for {align_image}: {disp_fn_med*1000} mas''')
 
     if disp_fn_med/pixscale > 1:
         print(f'Copying unaligned {align_image} to output, redo alignment')
@@ -846,7 +876,7 @@ def align_jwst_image(align_image, outdir, gaia = False, photfilename = None, xsh
         
     return guess_offset
 
-def fix_phot(mosaic):
+def fix_phot(mosaic, telescope='jwst'):
     '''
     Fix jhat photometry for i2d files
 
@@ -860,13 +890,18 @@ def fix_phot(mosaic):
     photfile : str  
         Fixed photometry file name
     '''
-    refcat, photfile = jwst_phot(mosaic)
+    if telescope=='jwst':
+        refcat, photfile = jwst_phot(mosaic)
+    elif telescope=='hst':
+        refcat, photfile = hst_phot(mosaic)
+    else:
+        raise ValueError(f'Telescope needs to be jwst or hst, got {telescope}')
     w = wcs.WCS(fits.open(mosaic)['SCI'].header)
     jh_radec = w.all_pix2world(refcat['x'], refcat['y'], 0)
     jh_ra, jh_dec = np.array(jh_radec[0]), np.array(jh_radec[1])
     refcat['ra'], refcat['dec'] = jh_ra, jh_dec
-    refcat.write(photfile.replace('i2d', 'i2d.corr'), format = 'ascii', overwrite = True)
-    return photfile.replace('i2d', 'i2d.corr')
+    refcat.write(photfile.replace('.phot.txt', '.corr.phot.txt'), format = 'ascii', overwrite = True)    
+    return photfile.replace('.phot.txt', '.corr.phot.txt')
 
 def get_visit_geoms(table):
     visits = np.unique(table['visit']).value
@@ -998,6 +1033,15 @@ if __name__ == '__main__':
     work_dir = args.workdir
     obj = args.object
     ncores = args.ncores
+    ra, dec, radius = args.ra, args.dec, args.radius*u.arcmin
+
+    if (obj is None) & ((ra is None) | (dec is None) | (radius is None)):
+        raise ValueError('At least one of object name or position is required')
+    
+    if obj is None:
+        coord = SkyCoord(ra=ra, dec=dec, frame='icrs', unit='deg')
+        query_mast_jwst(coord, radius)
+        create_symlink(obj)
 
     dolphot_basedir = create_dirs(work_dir, obj)
 
