@@ -31,7 +31,8 @@ from ccdproc import Combiner
 
 import stpsf
 from astropy.stats import sigma_clipped_stats as scs
-from photutils.psf.matching import resize_psf, SplitCosineBellWindow, create_matching_kernel, CosineBellWindow, TukeyWindow, TopHatWindow, HanningWindow
+#from photutils.psf.matching import resize_psf, SplitCosineBellWindow, create_matching_kernel, CosineBellWindow, TukeyWindow, TopHatWindow, HanningWindow
+from photutils.psf.matching import SplitCosineBellWindow, create_matching_kernel, CosineBellWindow, TukeyWindow, TopHatWindow, HanningWindow
 from astropy.convolution import convolve, convolve_fft
 from reproject.mosaicking import find_optimal_celestial_wcs
 import subprocess
@@ -417,7 +418,7 @@ def create_coadd_mosaic(table, outdir, filt, centroid=None,
     return filepath
 
 
-def create_gwcs(outdir, sci_header=None, wcs_out=None, shape_out=None):
+def create_gwcs(outdir, sci_header=None, wcs_out=None, shape_out=None, return_gwcs=False):
     '''
     Convert astropy WCS to a GWCS object and write it into an asdf file
 
@@ -465,12 +466,16 @@ def create_gwcs(outdir, sci_header=None, wcs_out=None, shape_out=None):
             ]
     wcsobj = g_wcs(pipeline)
     wcsobj.bounding_box = ((0, sci_header['NAXIS1']), (0, sci_header['NAXIS2']))
-    
-    #write gwcs to asdf file
-    tree = {"wcs": wcsobj}
-    wcs_file = AsdfFile(tree)
-    gwcs_path = f"{outdir}/mosaic_gwcs.asdf"
-    wcs_file.write_to(gwcs_path)
+
+    if return_gwcs:
+        return wcsobj
+
+    else:
+        #write gwcs to asdf file
+        tree = {"wcs": wcsobj}
+        wcs_file = AsdfFile(tree)
+        gwcs_path = f"{outdir}/mosaic_gwcs.asdf"
+        wcs_file.write_to(gwcs_path)
 
     return gwcs_path
 
@@ -725,6 +730,11 @@ def edit_spec_groups(table, spec_group_file):
         table['group'][basenames == fl] = ngrp+1
 
     return table
+
+def assign_gwcs(box_outdir, wcs_hdr):
+    wcsobj = create_gwcs(outdir=box_outdir, sci_header=wcs_hdr, return_gwcs=True)
+
+    return wcsobj
 
 if __name__ == '__main__':
     parser = create_parser()
