@@ -7,7 +7,7 @@ Builds a photometry catalog from ``--ref``, then runs ``jwst123.align_jwst_image
 
 Example:
 
-    python jwst123/scripts/jwst_relative_align.py \\
+    python -m jwst123.scripts.relative_align \\
         --ref /path/to/coadd_i2d.fits \\
         --align /path/to/mirimage_cal.fits \\
         --outdir alignment_output
@@ -35,10 +35,6 @@ from astropy.wcs import WCS
 from photutils.detection import DAOStarFinder
 
 warnings.filterwarnings('ignore')
-
-ROOT = Path(__file__).resolve().parents[2]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
 
 import jwst123  # noqa: E402
 

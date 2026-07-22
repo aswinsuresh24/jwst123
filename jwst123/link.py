@@ -1,23 +1,5 @@
 import glob, os
-import argparse
 
-def create_parser():
-    '''
-    Create a parser for the command line arguments
-
-    Returns:
-    -------
-    parser : argparse.ArgumentParser
-        arg parser
-    '''
-    parser = argparse.ArgumentParser(description='Symlink data for jwst123 run')
-    parser.add_argument('--datadir', type=str, help='Full path to directory with object data', required=True)
-    parser.add_argument('--symlinkdir', type=str, 
-                        help='Full path to directory containing the raw directory, in which symlinks will be created', 
-                        required=True)
-    parser.add_argument('--proc_dirs', nargs = '*', type=str, help='List of directories that have processed files', 
-                        default = [], required=False)
-    return parser
 
 def create_symlink(src, dst):
     '''
@@ -64,21 +46,3 @@ def remove_proc_files(files, dir):
     new_files = list(set(files) - set(proc_files))
 
     return new_files
-
-def main(argv=None):
-    parser = create_parser()
-    args = parser.parse_args(argv)
-
-    # Create symlinks
-    files = glob.glob(os.path.join(args.datadir, '**', '*.fits'), recursive=True)
-    for procdir in args.proc_dirs:
-        files = remove_proc_files(files, procdir)
-    print(f'Creating symlinks for {len(files)} files')
-    for file in files:
-        fl_dst = os.path.join(args.symlinkdir, 'raw', os.path.basename(file))
-        create_symlink(file, fl_dst)
-    return 0
-
-
-if __name__ == '__main__':
-    raise SystemExit(main())
