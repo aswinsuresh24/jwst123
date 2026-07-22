@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "jwst123"
 version = "0.1.0"
-description = "JWST NIRCam download, JHAT alignment, mosaicking, and DOLPHOT helpers (with legacy HST support)."
+description = "JWST download, JHAT alignment, mosaicking, and DOLPHOT helpers."
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
 license = { text = "MIT" }
@@ -17,10 +17,11 @@ keywords = [
     "astronomy",
     "jwst",
     "nircam",
-    "hst",
+    "miri",
     "mast",
     "photometry",
     "dolphot",
+    "jhat",
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -31,58 +32,49 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Astronomy",
 ]
-dependencies = [
-    "numpy>=1.25,<2",
-    "scipy>=1.14",
-    "astropy>=5.3.4",
-    "astroquery>=0.4.6",
-    "astroscrappy>=1.1.0",
-    "matplotlib",
-    "pandas",
-    "shapely",
-    "scikit-image",
-    "tqdm",
-    "requests",
-    "python-dateutil",
-    "progressbar33",
-    "ccdproc",
-    "reproject",
-    "photutils",
-    "jwst>=1.17,<2",
-    "jhat",
-    "drizzlepac",
-    "stwcs",
-    "stpsf",
-    "tables",
-]
+# Runtime dependencies are loaded from requirements.txt (pinned).
+dynamic = ["dependencies"]
 
 [project.optional-dependencies]
 dev = [
     "ipython",
     "jupyter",
-    "pytest",
+    "pytest>=8.0",
 ]
 
 [project.urls]
 Homepage = "https://github.com/charliekilpatrick/jwst-nircam"
 Repository = "https://github.com/charliekilpatrick/jwst-nircam"
 
+# Console entry points live under jwst123.scripts (library code stays in jwst123.*).
 [project.scripts]
-jwst-download = "jwst_download:main"
-jwst123-link = "link:main"
+download = "jwst123.scripts.download:main"
+align = "jwst123.scripts.align:main"
+mosaic = "jwst123.scripts.mosaic:main"
+link-raw = "jwst123.scripts.link_raw:main"
+image-overlap = "jwst123.scripts.image_overlap:main"
+illuminated-s-region = "jwst123.scripts.illuminated_s_region:main"
+relative-align = "jwst123.scripts.relative_align:main"
+apply-gwcs = "jwst123.scripts.apply_gwcs:main"
+rsg-cat = "jwst123.scripts.rsg_cat:main"
 
-[tool.setuptools]
-include-package-data = true
-py-modules = [
-    "jwst123",
-    "jwst_download",
-    "mosaic",
-    "nbutils",
-    "nircam_settings",
-    "link",
-    "rsg_cat",
-    "hst123",
-]
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"] }
 
 [tool.setuptools.packages.find]
-include = ["common*"]
+include = ["jwst123*"]
+exclude = ["jwst123.notebooks*"]
+
+[tool.setuptools.package-data]
+jwst123 = [
+    "notebooks/*.ipynb",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["tests"]
+addopts = "-ra"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::UserWarning",
+]
