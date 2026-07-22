@@ -456,9 +456,14 @@ def xmatch_common(skycrd_1, skycrd_2, dist_limit = 5.0):
         indices in catalog 2 and distances in arcsec respectively
     """
     idx, d2d, d3d = skycrd_1.match_to_catalog_sky(skycrd_2)
-    d = {'idx_1' : np.arange(0, len(skycrd_1)), 'idx_2' : idx, 'd2d': d2d.to(u.arcsec)}
+    # Store plain floats (arcsec) so pandas comparisons stay dimensionless.
+    d = {
+        'idx_1': np.arange(0, len(skycrd_1)),
+        'idx_2': idx,
+        'd2d': d2d.to(u.arcsec).value,
+    }
     xmatch_df = pd.DataFrame(data=d)
     matched_df = xmatch_df.loc[xmatch_df.groupby('idx_2').d2d.idxmin()]
-    dist_matched_df = matched_df[matched_df['d2d'] < dist_limit*u.arcsec]
-    
+    dist_matched_df = matched_df[matched_df['d2d'] < dist_limit]
+
     return dist_matched_df
