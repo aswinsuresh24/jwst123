@@ -2,8 +2,8 @@
 """
 Relative JHAT alignment of one JWST image to a reference, with dispersion metrics.
 
-Builds a photometry catalog from ``--ref``, optionally photometers ``--align``,
-then runs ``jwst123.align_jwst_image`` and reports initial/final dispersion.
+Builds a photometry catalog from ``--ref``, then runs ``jwst123.align_jwst_image``
+(which photometers ``--align`` internally) and reports initial/final dispersion.
 
 Example:
 
@@ -20,6 +20,7 @@ import os
 import shutil
 import sys
 import warnings
+from contextlib import contextmanager
 from pathlib import Path
 
 import matplotlib
@@ -35,7 +36,6 @@ from photutils.detection import DAOStarFinder
 
 warnings.filterwarnings('ignore')
 
-# Ensure local package import when run from another cwd.
 ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -77,11 +77,6 @@ def create_parser() -> argparse.ArgumentParser:
         help='Number of bright sources for JHAT (default: 800).',
     )
     parser.add_argument(
-        '--skip-align-phot',
-        action='store_true',
-        help='Skip photometry on --align before running JHAT.',
-    )
-    parser.add_argument(
         '--plot',
         action='store_true',
         help='Enable JHAT diagnostic plots (saved via Agg; non-interactive).',
@@ -100,6 +95,11 @@ def has_jwst_gwcs(image: str) -> bool:
         return any(hdu.name == 'ASDF' for hdu in hdul)
 
 
+def phot_catalog_path(image: str, outdir: str) -> str:
+    """Return ``outdir/<image-stem>.phot.txt``."""
+    return str(Path(outdir) / f'{Path(image).stem}.phot.txt')
+
+
 def write_jhat_phot_table(table: Table, photfilename: str) -> str:
     """
     Write a catalog JHAT can load.
@@ -107,16 +107,29 @@ def write_jhat_phot_table(table: Table, photfilename: str) -> str:
     JHAT's pdastro loader does not treat '#' as a comment header, so write a
     plain space-separated table via pandas.
     """
+    Path(photfilename).parent.mkdir(parents=True, exist_ok=True)
     table.to_pandas().to_string(photfilename, index=False)
     return photfilename
 
 
-def photutils_phot(image: str, nsigma: float = 5.0, fwhm: float = 3.0) -> str:
-    """Fallback DAOStarFinder photometry using the SCI WCS."""
+def load_sci_data_wcs(image: str) -> tuple[np.ndarray, WCS]:
+    """Load science array + WCS from SCI if present, else the first 2-D HDU."""
     with fits.open(image) as hdul:
-        data = hdul['SCI'].data.astype(float)
-        wcs = WCS(hdul['SCI'].header)
+        if 'SCI' in hdul and hdul['SCI'].data is not None:
+            hdu = hdul['SCI']
+        else:
+            hdu = next(
+                (h for h in hdul if h.data is not None and getattr(h.data, 'ndim', 0) == 2),
+                None,
+            )
+            if hdu is None:
+                raise ValueError(f'No 2-D image HDU found in {image}')
+        return hdu.data.astype(float), WCS(hdu.header)
 
+
+def photutils_phot(image: str, photfilename: str, nsigma: float = 5.0, fwhm: float = 3.0) -> str:
+    """Fallback DAOStarFinder photometry using the science WCS."""
+    data, wcs = load_sci_data_wcs(image)
     _, median, std = sigma_clipped_stats(data, sigma=3.0)
     sources = DAOStarFinder(fwhm=fwhm, threshold=nsigma * std)(data - median)
     if sources is None or len(sources) == 0:
@@ -138,39 +151,72 @@ def photutils_phot(image: str, nsigma: float = 5.0, fwhm: float = 3.0) -> str:
             'dmag': dmag,
         }
     )
-    photfilename = image.replace('.fits', '.phot.txt')
     return write_jhat_phot_table(catalog, photfilename)
 
 
-def build_phot_catalog(image: str, label: str = 'image') -> str:
+def build_ref_catalog(image: str, outdir: str, photfile: str | None = None) -> str:
     """
-    Build a JHAT-compatible photometry catalog for ``image``.
+    Build or stage a JHAT-compatible reference photometry catalog in ``outdir``.
 
-    Preference order:
-      1. ``jwst123.fix_phot`` / ``jwst_phot`` when JWST GWCS is present
-      2. ``jwst123.fix_phot`` for i2d mosaics (rewrites RA/Dec)
-      3. photutils DAOStarFinder fallback for custom coadds
+    Preference order for new catalogs:
+      1. ``jwst123.jwst_phot`` when JWST GWCS / ASDF is present
+      2. ``jwst123.fix_phot`` for i2d mosaics (rewrites RA/Dec from SCI WCS)
+      3. photutils DAOStarFinder for custom coadds without pipeline WCS
     """
-    print(f'Running photometry on {label}: {image}')
+    if photfile is not None:
+        photfile = str(Path(photfile).expanduser().resolve())
+        if not os.path.exists(photfile):
+            raise FileNotFoundError(f'Reference photometry catalog not found: {photfile}')
+        print(f'Using existing reference catalog: {photfile}')
+        return stage_photfile(photfile, outdir)
+
+    dest = phot_catalog_path(image, outdir)
+    print(f'Running photometry on reference: {image}')
 
     if has_jwst_gwcs(image):
         print('  detected JWST ASDF/GWCS → jwst_phot')
-        _, photfilename = jwst123.jwst_phot(image)
-        return photfilename
+        _, src = jwst123.jwst_phot(image)
+        return stage_photfile(src, outdir, dest_name=Path(dest).name)
 
-    # Custom coadds / mosaics often lack ASDF; prefer fix_phot when possible.
-    if image.endswith('i2d.fits'):
+    if image.endswith(('i2d.fits', 'i2d.fits.gz')):
         try:
             print('  no JWST ASDF/GWCS; trying fix_phot')
-            return jwst123.fix_phot(image)
+            src = jwst123.fix_phot(image)
+            return stage_photfile(src, outdir, dest_name=Path(dest).name)
         except Exception as exc:
             print(f'  fix_phot failed ({exc}); falling back to photutils')
 
     print('  falling back to photutils DAOStarFinder')
-    return photutils_phot(image)
+    return photutils_phot(image, dest)
 
 
-def install_plot_saver(outdir: str, prefix: str):
+def stage_photfile(
+    photfile: str,
+    outdir: str,
+    dest_name: str | None = None,
+) -> str:
+    """Copy a catalog into ``outdir`` (no-op if already there) and return that path."""
+    dest = os.path.join(outdir, dest_name or os.path.basename(photfile))
+    if os.path.exists(dest) and os.path.samefile(photfile, dest):
+        return dest
+    shutil.copy2(photfile, dest)
+    print(f'Copied reference catalog → {dest}')
+    return dest
+
+
+@contextmanager
+def working_directory(path: str):
+    """Temporarily change the process working directory."""
+    cwd = os.getcwd()
+    os.chdir(path)
+    try:
+        yield
+    finally:
+        os.chdir(cwd)
+
+
+@contextmanager
+def plot_saver(outdir: str, prefix: str):
     """Save JHAT figures that only call ``plt.show()`` into ``outdir``."""
     counter = {'n': 0}
     already_saved: set[int] = set()
@@ -187,15 +233,20 @@ def install_plot_saver(outdir: str, prefix: str):
                 continue
             fig = plt.figure(num)
             counter['n'] += 1
-            path = os.path.join(outdir, f'{prefix}.diag_{counter["n"]:02d}.png')
-            fig.savefig(path, dpi=150, bbox_inches='tight')
-            print(f'Saved diagnostic plot: {path}')
+            out = os.path.join(outdir, f'{prefix}.diag_{counter["n"]:02d}.png')
+            # Use the original savefig so we do not mark this as a JHAT savefig.
+            original_savefig(fig, out, dpi=150, bbox_inches='tight')
+            print(f'Saved diagnostic plot: {out}')
         already_saved.clear()
         plt.close('all')
 
     plt.Figure.savefig = savefig_track
     plt.show = show_and_save
-    return original_show, original_savefig
+    try:
+        yield
+    finally:
+        plt.show = original_show
+        plt.Figure.savefig = original_savefig
 
 
 def resolve_outdir(outdir: str) -> str:
@@ -204,73 +255,51 @@ def resolve_outdir(outdir: str) -> str:
     return str(path)
 
 
-def stage_photfile(photfile: str, outdir: str) -> str:
-    """Copy the reference catalog into ``outdir`` and return that path."""
-    dest = os.path.join(outdir, os.path.basename(photfile))
-    same_file = (
-        os.path.exists(dest)
-        and os.path.samefile(photfile, dest)
-    )
-    if not same_file:
-        shutil.copy2(photfile, dest)
-        print(f'Copied reference catalog → {dest}')
-    return dest
-
-
 def run_alignment(
     ref_image: str,
     align_image: str,
     outdir: str,
     photfile: str | None = None,
     nbright: int = 800,
-    skip_align_phot: bool = False,
     plot: bool = False,
     verbose: bool = False,
 ) -> tuple[object, str]:
-    """Build catalogs and align ``align_image`` to ``ref_image``."""
+    """Build a reference catalog and align ``align_image`` to it."""
+    ref_image = str(Path(ref_image).expanduser().resolve())
+    align_image = str(Path(align_image).expanduser().resolve())
     outdir = resolve_outdir(outdir)
+
     print(f'Output directory: {outdir}')
     print(f'Reference image:  {ref_image}')
     print(f'Align image:      {align_image}')
 
-    if photfile is not None:
-        if not os.path.exists(photfile):
-            raise FileNotFoundError(f'Reference photometry catalog not found: {photfile}')
-        print(f'Using existing reference catalog: {photfile}')
-        ref_phot = photfile
-    else:
-        ref_phot = build_phot_catalog(ref_image, label='reference')
+    ref_phot = build_ref_catalog(ref_image, outdir, photfile=photfile)
 
-    ref_phot = stage_photfile(ref_phot, outdir)
-
-    if not skip_align_phot:
-        align_phot = build_phot_catalog(align_image, label='align')
-        print(f'Align photometry catalog: {align_phot}')
-
-    plot_hooks = None
-    if plot:
-        stem = Path(align_image).stem.replace('_cal', '').replace('_i2d', '')
-        plot_hooks = install_plot_saver(outdir, prefix=stem)
-
-    try:
-        # JHAT treats outsubdir relative to cwd; chdir so products land in outdir.
-        cwd = os.getcwd()
-        os.chdir(outdir)
-        try:
+    # JHAT's outsubdir is relative to cwd; run from outdir so products land there.
+    # Paths above are absolute so chdir is safe.
+    stem = Path(align_image).stem.replace('_cal', '').replace('_i2d', '')
+    with working_directory(outdir):
+        if plot:
+            with plot_saver(outdir, prefix=stem):
+                guess_offset = jwst123.align_jwst_image(
+                    align_image=align_image,
+                    outdir='.',
+                    gaia=False,
+                    photfilename=ref_phot,
+                    Nbright=nbright,
+                    plot=True,
+                    verbose=verbose,
+                )
+        else:
             guess_offset = jwst123.align_jwst_image(
                 align_image=align_image,
                 outdir='.',
                 gaia=False,
                 photfilename=ref_phot,
                 Nbright=nbright,
-                plot=plot,
+                plot=False,
                 verbose=verbose,
             )
-        finally:
-            os.chdir(cwd)
-    finally:
-        if plot_hooks is not None:
-            plt.show, plt.Figure.savefig = plot_hooks
 
     return guess_offset, outdir
 
@@ -290,13 +319,12 @@ def main(argv: list[str] | None = None) -> int:
             outdir=args.outdir,
             photfile=args.photfile,
             nbright=args.nbright,
-            skip_align_phot=args.skip_align_phot,
             plot=args.plot,
             verbose=args.verbose,
         )
     except Exception as exc:
         print(f'ERROR: alignment failed: {exc}', file=sys.stderr)
-        raise
+        return 1
 
     print(f'Guess offset (x, y): {guess_offset}')
     print(f'Done. Products in {outdir}')
