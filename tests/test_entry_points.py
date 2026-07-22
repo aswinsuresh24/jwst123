@@ -16,7 +16,7 @@ EXPECTED_SCRIPTS = {
     'illuminated-s-region': 'jwst123.scripts.illuminated_s_region:main',
     'relative-align': 'jwst123.scripts.relative_align:main',
     'apply-gwcs': 'jwst123.scripts.apply_gwcs:main',
-    'rsg-cat': 'jwst123.scripts.rsg_cat:main',
+    'catalog': 'jwst123.scripts.catalog:main',
 }
 
 SCRIPT_MODULES = [
@@ -28,7 +28,7 @@ SCRIPT_MODULES = [
     'jwst123.scripts.illuminated_s_region',
     'jwst123.scripts.relative_align',
     'jwst123.scripts.apply_gwcs',
-    'jwst123.scripts.rsg_cat',
+    'jwst123.scripts.catalog',
 ]
 
 

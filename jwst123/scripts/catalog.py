@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a combined RSG photometry catalog from DOLPHOT column exports."""
+"""Build a combined photometry catalog from DOLPHOT column exports."""
 
 from __future__ import annotations
 
@@ -9,12 +9,12 @@ import glob
 import numpy as np
 import pandas as pd
 
-from jwst123.rsg_cat import create_common_rsg_cat
+from jwst123.catalog import create_common_catalog
 
 
 def create_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description='Combine per-filter RSG CSV catalogs into one table.',
+        description='Combine per-filter CSV catalogs into one table.',
     )
     parser.add_argument(
         '--photdir',
@@ -52,7 +52,7 @@ def main(argv=None) -> int:
     common_ids = np.unique(source_ids)
 
     columns = sorted(glob.glob(f'{photdir}/*columns'))
-    create_common_rsg_cat(common_ids, dfs, columns, args.outfile)
+    create_common_catalog(common_ids, dfs, columns, args.outfile)
     print(f'Wrote {args.outfile}')
     return 0
 

@@ -141,7 +141,7 @@ def save_photfiles(photfile_path, outdir, obj, chunksize = 100000):
             chunk.set_index('idx', inplace = True)
             chunk[cuts].to_csv(f'{outdir}/{obj}_{i}_{j}.csv', mode = 'a', header = False)
 
-def create_common_rsg_cat(common_ids, dfs, columns, outfile):
+def create_common_catalog(common_ids, dfs, columns, outfile):
     """
     save combined photometry for common sources to a csv file
 

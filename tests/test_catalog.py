@@ -1,4 +1,4 @@
-"""Tests for rsg-cat script and jwst123.rsg_cat helpers."""
+"""Tests for catalog script and jwst123.catalog helpers."""
 
 from __future__ import annotations
 
@@ -8,8 +8,8 @@ from unittest.mock import patch
 import numpy as np
 import pandas as pd
 
-from jwst123.rsg_cat import get_filters, map_columns
-from jwst123.scripts import rsg_cat as rsg_script
+from jwst123.catalog import get_filters, map_columns
+from jwst123.scripts import catalog as catalog_script
 
 
 def _write_columns_file(path: Path) -> Path:
@@ -52,17 +52,17 @@ def test_get_filters_and_map_columns(tmp_path: Path):
     assert 'F115W' in filter_cols
 
 
-def test_rsg_cat_main_no_csv(tmp_path: Path):
-    rc = rsg_script.main(['--photdir', str(tmp_path), '--outfile', str(tmp_path / 'out.csv')])
+def test_catalog_main_no_csv(tmp_path: Path):
+    rc = catalog_script.main(['--photdir', str(tmp_path), '--outfile', str(tmp_path / 'out.csv')])
     assert rc == 1
 
 
-def test_rsg_cat_main_calls_create_common(tmp_path: Path):
+def test_catalog_main_calls_create_common(tmp_path: Path):
     csv_path = tmp_path / 'rsg_f115w.csv'
     pd.DataFrame({'idx': [1, 2], 'x': [10.0, 11.0]}).to_csv(csv_path, index=False)
     outfile = tmp_path / 'combined.csv'
-    with patch('jwst123.scripts.rsg_cat.create_common_rsg_cat') as mock_create:
-        rc = rsg_script.main(['--photdir', str(tmp_path), '--outfile', str(outfile)])
+    with patch('jwst123.scripts.catalog.create_common_catalog') as mock_create:
+        rc = catalog_script.main(['--photdir', str(tmp_path), '--outfile', str(outfile)])
     assert rc == 0
     mock_create.assert_called_once()
     args = mock_create.call_args[0]
@@ -70,8 +70,8 @@ def test_rsg_cat_main_calls_create_common(tmp_path: Path):
     assert args[3] == str(outfile)
 
 
-def test_rsg_cat_parser():
-    parser = rsg_script.create_parser()
+def test_catalog_parser():
+    parser = catalog_script.create_parser()
     args = parser.parse_args(['--photdir', 'p', '--outfile', 'o.csv'])
     assert args.photdir == 'p'
     assert args.outfile == 'o.csv'

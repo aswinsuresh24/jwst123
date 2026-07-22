@@ -50,7 +50,7 @@ jobs:
           illuminated-s-region --help
           relative-align --help
           apply-gwcs --help
-          rsg-cat --help
+          catalog --help
 
       - name: Run unit tests
         run: |

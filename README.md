@@ -38,7 +38,7 @@ DOLPHOT runs.
 | `jwst123/scripts/image_overlap.py` | Maximum-overlap reference selection |
 | `jwst123/scripts/illuminated_s_region.py` | Illuminated `S_REGION` CLI |
 | `jwst123/scripts/apply_gwcs.py` | Attach GWCS to coadd datamodels |
-| `jwst123/scripts/rsg_cat.py` | RSG catalog CLI |
+| `jwst123/scripts/catalog.py` | Combined photometry catalog CLI |
 
 ### Notebooks
 
@@ -146,7 +146,7 @@ Useful options:
 | `--instruments` | `NIRCAM MIRI` | Instrument name filters |
 | `--token` | `MAST_API_TOKEN` / `MAST_TOKEN` | MAST API token for proprietary data |
 
-After install, console scripts from `pyproject.toml` are available (`download`, `align`, `mosaic`, `link-raw`, `image-overlap`, `illuminated-s-region`, `relative-align`, `apply-gwcs`, `rsg-cat`).
+After install, console scripts from `pyproject.toml` are available (`download`, `align`, `mosaic`, `link-raw`, `image-overlap`, `illuminated-s-region`, `relative-align`, `apply-gwcs`, `catalog`).
 
 ### Stage files for a reduction
 
