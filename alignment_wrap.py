@@ -1,4 +1,3 @@
-import glob
 import os
 from pathlib import Path
 import subprocess
@@ -39,10 +38,13 @@ with open(success_file, 'w') as success, open(fail_file, 'w') as failed:
             result = subprocess.run(command)
 
             if result.returncode == 0:
-                success.write(f'MIRI image: {align_image}, Reference image: {ref_image}\n')
+                success.write(f'MIRI image: {align_image}, \nReference image: {ref_image}\n\n')
+                success.flush()
 
             else:
-                failed.write(f'MIRI image: {align_image}, Reference image: {ref_image}\n')
+                failed.write(f'MIRI image: {align_image}, \nReference image: {ref_image}\n\n')
+                failed.flush()
 
-print(f'Successful pairs written to {successful_file}')
-print(f'Failed pairs written to {failed_file}')
+print('Done')
+print(f'Successful pairs written to {success_file}')
+print(f'Failed pairs written to {fail_file}')
