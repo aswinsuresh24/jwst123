@@ -593,7 +593,7 @@ def calc_dispersion(ref_table, phot_file, w = False, dist_limit = 1, sig=2,
         plt.grid(alpha = 0.2, linestyle = '--')
         plt.show()
         
-    return mean_dispersion, median_dispersion, std_dispersion
+    return mean_dispersion, median_dispersion, std_dispersion, len(dist_matched_df)
 
 def jwst_dispersion(align_image, outdir, photfile=None, gaia=False, plot=False, sig=2):
     if 'cal.fits' in align_image:
@@ -614,7 +614,7 @@ def jwst_dispersion(align_image, outdir, photfile=None, gaia=False, plot=False, 
             raise ValueError('Input photometric catalog is required')
         refcat = Table.read(photfile, format='ascii')
 
-    disp_in_mean, disp_in_median, disp_in_std = calc_dispersion(refcat, jhat_image.replace('_jhat.fits', '.phot.txt'), dist_limit = 0.5, sig=sig, plot = plot)
+    disp_in_mean, disp_in_median, disp_in_std, _n_in = calc_dispersion(refcat, jhat_image.replace('_jhat.fits', '.phot.txt'), dist_limit = 0.5, sig=sig, plot = plot)
     print(f'Initial mean dispersion: {disp_in_mean*1000} mas')
     print(f'Initial median dispersion: {disp_in_median*1000} mas')
 
@@ -624,10 +624,11 @@ def jwst_dispersion(align_image, outdir, photfile=None, gaia=False, plot=False, 
         wcs_in = wcs.WCS(fits.getheader(phot_image, ext=1))
     else:
         wcs_in = False
-    disp_fn_mean, disp_fn_median, disp_fn_std = calc_dispersion(refcat, align_photfile, w = wcs_in, sig=sig,
+    disp_fn_mean, disp_fn_median, disp_fn_std, n_calibrators = calc_dispersion(refcat, align_photfile, w = wcs_in, sig=sig,
                                                                 dist_limit = 0.5, plot = plot)
     print(f'Final mean dispersion: {disp_fn_mean*1000} mas')
     print(f'Final median dispersion: {disp_fn_median*1000} mas')
+    print(f'Final astrometric calibrators: {n_calibrators}')
     os.rename(temp_cal_name, jhat_image)
 
     with fits.open(jhat_image, mode='update') as filehandle:
@@ -635,10 +636,12 @@ def jwst_dispersion(align_image, outdir, photfile=None, gaia=False, plot=False, 
             filehandle[0].header['GADISPM'] = disp_fn_mean
             filehandle[0].header['GADISPD'] = disp_fn_median
             filehandle[0].header['GADISPS'] = disp_fn_std
+            filehandle[0].header['GANCAL'] = n_calibrators
         else:
             filehandle[0].header['JWDISPM'] = disp_fn_mean
             filehandle[0].header['JWDISPD'] = disp_fn_median
             filehandle[0].header['JWDISPS'] = disp_fn_std
+            filehandle[0].header['JWNCAL'] = n_calibrators
             filehandle[0].header['JWCAT'] = os.path.basename(photfile)
 
     return disp_in_mean, disp_in_median, disp_fn_mean, disp_fn_median 
@@ -657,7 +660,7 @@ def guess_shift(align_image, ref_table, radius_px = 50, res = 5, sig = 2, plot =
         for ys in ysh:
             in_wcs = copy.copy(sci_hdr)
             in_wcs.wcs.crpix = [crpix1+xs, crpix2+ys]
-            _, disp, _ = calc_dispersion(ref_table, align_photfile, w=in_wcs, dist_limit = 1, sig = sig, plot = False)
+            _, disp, _, _ = calc_dispersion(ref_table, align_photfile, w=in_wcs, dist_limit = 1, sig = sig, plot = False)
             off.append(disp)
             xshift.append(xs)
             yshift.append(ys)
@@ -749,7 +752,34 @@ def run_jhat(align_image, outdir, params, gaia = False, photfilename = None, xsh
             Nbright=Nbright,
             **params)
         
-def align_jwst_image(align_image, outdir, gaia = False, photfilename = None, xshift = 0, yshift = 0, Nbright = 800, sig = 2, verbose = False, plot = False):
+def align_jwst_image(
+    align_image,
+    outdir,
+    gaia=False,
+    photfilename=None,
+    xshift=0,
+    yshift=0,
+    Nbright=800,
+    sig=2,
+    verbose=False,
+    plot=False,
+    soft_fail=True,
+    soft_fail_pix=2.0,
+):
+    """
+    Align ``align_image`` with JHAT.
+
+    Parameters
+    ----------
+    soft_fail : bool
+        If True, discard a JHAT product whose median residual exceeds
+        ``soft_fail_pix`` pixels and replace it with an unaligned copy.
+        Set False during iterative refinement so a usable WCS is never wiped.
+    soft_fail_pix : float
+        Median-residual threshold in detector pixels (default 2.0). The old
+        default of 1.0 was too aggressive for MIRI F770W/longer filters, where
+        good solutions often land at ~1.1–1.5 pix before refine.
+    """
     print(f"Aligning {os.path.basename(align_image)} to {'Gaia' if gaia else photfilename.replace('.phot.txt', '.fits')}")
     params = strict_gaia_params if gaia else strict_jwst_params
     if plot: params['showplots'] = 2
@@ -770,6 +800,11 @@ def align_jwst_image(align_image, outdir, gaia = False, photfilename = None, xsh
     except:
         pixscale = np.abs(fits.getval(align_image, 'CD1_2', ext=1)*3600)
     pixscale = 0.031 if pixscale < 0.032 else 0.062
+    retry_pix = min(float(soft_fail_pix), 1.0)
+
+    # Initialize so failed JHAT/dispersion attempts cannot raise UnboundLocalError.
+    disp_in_mu = disp_in_med = disp_fn_mu = disp_fn_med = 99.99
+    guess_offset = (0, 0)
 
     try:
         run_jhat(align_image=align_image, 
@@ -792,7 +827,10 @@ def align_jwst_image(align_image, outdir, gaia = False, photfilename = None, xsh
         print(traceback.format_exc())
         disp_fn_med = 99.99
 
-    if disp_fn_med/pixscale > 1:
+    # Retry with relaxed params / guess shift when the strict solution is still
+    # worse than one MIRI/NIRCam pixel. Keeping this gate at 1 pix preserves the
+    # historical retry behavior even when soft_fail_pix is larger.
+    if disp_fn_med/pixscale > retry_pix:
         params = relaxed_gaia_params if gaia else relaxed_jwst_params
         if plot: params['showplots'] = 2 
         try:
@@ -806,7 +844,7 @@ def align_jwst_image(align_image, outdir, gaia = False, photfilename = None, xsh
             print(traceback.format_exc())
             disp_fn_med = 99.99
 
-    if disp_fn_med/pixscale > 1:
+    if disp_fn_med/pixscale > retry_pix:
         if gaia:
             ref_table = query_gaia(align_image)
         else:
@@ -825,8 +863,15 @@ def align_jwst_image(align_image, outdir, gaia = False, photfilename = None, xsh
 
     print(f'''Final {'Gaia' if gaia else 'JWST'} dispersion for {align_image}: {disp_fn_mu*1000} mas''')
 
-    if disp_fn_med/pixscale > 1:
-        print(f'Copying unaligned {align_image} to output, redo alignment')
+    # Soft-fail wipe: only discard the JHAT WCS when soft_fail is enabled and
+    # the median residual is still above soft_fail_pix. For MIRI (~0.062"/pix)
+    # the old 1-pixel cut (~62 mas) rejected many usable F770W solutions that
+    # refine can tighten; default soft_fail_pix=2.0 keeps those (~124 mas).
+    if soft_fail and disp_fn_med/pixscale > soft_fail_pix:
+        print(
+            f'Copying unaligned {align_image} to output, redo alignment '
+            f'(median {disp_fn_med*1000:.1f} mas > {soft_fail_pix}*pixscale)'
+        )
         if 'cal.fits' in align_image:
             jhat_image = os.path.join(outdir, os.path.basename(align_image.replace('cal.fits', 'jhat.fits')))
         elif 'i2d.fits' in align_image:
@@ -839,10 +884,18 @@ def align_jwst_image(align_image, outdir, gaia = False, photfilename = None, xsh
                 filehandle[0].header['GADISPM'] = disp_in_mu
                 filehandle[0].header['GADISPD'] = disp_in_med
                 filehandle[0].header['GADISPS'] = 'NaN'
+                filehandle[0].header['GANCAL'] = 0
             else:
                 filehandle[0].header['JWDISPM'] = disp_in_mu
                 filehandle[0].header['JWDISPD'] = disp_in_med
                 filehandle[0].header['JWDISPS'] = 'NaN'
+                filehandle[0].header['JWNCAL'] = 0
+    elif disp_fn_med/pixscale > retry_pix:
+        print(
+            f'Keeping JHAT solution despite median '
+            f'{disp_fn_med*1000:.1f} mas ({disp_fn_med/pixscale:.2f} pix); '
+            f'below soft-fail cut ({soft_fail_pix} pix) for refine / summary'
+        )
         
     return guess_offset
 

@@ -9,10 +9,12 @@ import warnings
 from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
 from astropy import units as u
 from astropy.io import fits
 from astropy.wcs import WCS
 from shapely.geometry import Polygon
+from shapely.ops import unary_union
 
 from illuminated_s_region import SRegionPolygon, illuminated_s_region_from_fits
 
@@ -50,13 +52,16 @@ class AreaMetrics:
 
 @dataclass(frozen=True)
 class MirIFootprint:
-    """Illuminated MIRI footprint projected into the MIRI WCS pixel plane."""
+    """Illuminated MIRI footprint (sky S_REGION + on-detector pixel polygon)."""
 
     path: str
     s_region: SRegionPolygon
     wcs: WCS
     polygon: Polygon
     pixel_area_arcmin2: float
+    center_ra_deg: float
+    center_dec_deg: float
+    sky_polygon_arcsec: Polygon
 
     @property
     def area(self) -> AreaMetrics:
@@ -66,9 +71,16 @@ class MirIFootprint:
             self.polygon.area,
         )
 
+    @property
+    def pixel_area_arcsec2(self) -> float:
+        return self.pixel_area_arcmin2 * 3600.0
+
     @classmethod
     def from_fits(cls, path: str) -> MirIFootprint:
         s_region, _, wcs, _, _, _ = illuminated_s_region_from_fits(path)
+        verts = np.asarray(s_region.vertices, dtype=float)
+        center_ra = float(np.mean(verts[:, 0]))
+        center_dec = float(np.mean(verts[:, 1]))
         return cls(
             path=path,
             s_region=s_region,
@@ -77,6 +89,9 @@ class MirIFootprint:
             pixel_area_arcmin2=float(
                 wcs.proj_plane_pixel_area().to(u.arcmin**2).value
             ),
+            center_ra_deg=center_ra,
+            center_dec_deg=center_dec,
+            sky_polygon_arcsec=s_region.to_tangent_polygon(center_ra, center_dec),
         )
 
     def metrics(self, area_pix2: float) -> AreaMetrics:
@@ -84,6 +99,19 @@ class MirIFootprint:
             area_pix2,
             self.pixel_area_arcmin2,
             float(self.polygon.area),
+        )
+
+    def metrics_from_sky_arcsec2(self, area_arcsec2: float) -> AreaMetrics:
+        """Convert a tangent-plane area (arcsec²) into MIRI-pixel AreaMetrics."""
+        pix_area = self.pixel_area_arcsec2
+        area_pix2 = float(area_arcsec2) / pix_area if pix_area > 0 else 0.0
+        miri_roi_pix2 = (
+            float(self.sky_polygon_arcsec.area) / pix_area if pix_area > 0 else 0.0
+        )
+        return AreaMetrics.from_pixels(
+            area_pix2,
+            self.pixel_area_arcmin2,
+            miri_roi_pix2,
         )
 
 
@@ -118,25 +146,60 @@ def polygon_area(polygon: Polygon) -> float:
 
 
 def compute_overlap(miri: MirIFootprint, ref_path: str) -> OverlapResult:
-    """Project a reference S_REGION into MIRI pixels and compute overlap."""
+    """
+    Compute footprint overlap in a local sky tangent plane.
+
+    Intersection is performed on ``S_REGION`` polygons expressed as
+    arcsecond offsets from the MIRI footprint center.  This avoids false
+    overlaps from WCS pixel extrapolation of off-FOV reference footprints.
+    Reported areas are converted to MIRI pixels² via the MIRI pixel solid angle.
+    """
     ref_s_region = load_header_s_region(ref_path)
-    ref_poly = ref_s_region.to_pixel_polygon(miri.wcs)
-    overlap_poly = miri.polygon.intersection(ref_poly)
-    miri_roi = float(miri.polygon.area)
+    ref_sky = ref_s_region.to_tangent_polygon(
+        miri.center_ra_deg,
+        miri.center_dec_deg,
+    )
+    overlap_sky = miri.sky_polygon_arcsec.intersection(ref_sky)
     return OverlapResult(
         ref_path=ref_path,
         ref_s_region=ref_s_region,
-        ref_area=AreaMetrics.from_pixels(
-            float(ref_poly.area),
-            miri.pixel_area_arcmin2,
-            miri_roi,
-        ),
-        overlap_area=AreaMetrics.from_pixels(
-            polygon_area(overlap_poly),
-            miri.pixel_area_arcmin2,
-            miri_roi,
-        ),
+        ref_area=miri.metrics_from_sky_arcsec2(polygon_area(ref_sky)),
+        overlap_area=miri.metrics_from_sky_arcsec2(polygon_area(overlap_sky)),
     )
+
+
+def compute_cumulative_overlap_fraction(
+    miri: MirIFootprint,
+    ref_paths: list[str],
+) -> float:
+    """
+    Fraction of the MIRI illuminated ROI covered by the union of references.
+
+    Overlapping reference footprints are merged (unique area only) before
+    dividing by the MIRI sky footprint area. Returns 0.0 when there is no
+    overlap.
+    """
+    miri_area = polygon_area(miri.sky_polygon_arcsec)
+    if miri_area <= 0.0 or not ref_paths:
+        return 0.0
+
+    pieces = []
+    for ref_path in ref_paths:
+        try:
+            ref_s_region = load_header_s_region(ref_path)
+            ref_sky = ref_s_region.to_tangent_polygon(
+                miri.center_ra_deg,
+                miri.center_dec_deg,
+            )
+            overlap_sky = miri.sky_polygon_arcsec.intersection(ref_sky)
+        except Exception:
+            continue
+        if not overlap_sky.is_empty and polygon_area(overlap_sky) > 0.0:
+            pieces.append(overlap_sky)
+
+    if not pieces:
+        return 0.0
+    return float(polygon_area(unary_union(pieces)) / miri_area)
 
 
 def overlap_area_pixels(
@@ -144,15 +207,23 @@ def overlap_area_pixels(
     ref_image: str,
 ) -> tuple[float, Polygon, Polygon]:
     """
-    Return overlap area (MIRI pixels²) and the two pixel-plane polygons.
+    Return overlap area (MIRI pixels²) and the two sky-tangent polygons.
 
+    Polygons are in local tangent-plane arcseconds (not detector pixels).
     Kept for programmatic reuse of the previous API.
     """
     miri = MirIFootprint.from_fits(miri_image)
     ref_s_region = load_header_s_region(ref_image)
-    ref_poly = ref_s_region.to_pixel_polygon(miri.wcs)
-    overlap = miri.polygon.intersection(ref_poly)
-    return polygon_area(overlap), miri.polygon, ref_poly
+    ref_sky = ref_s_region.to_tangent_polygon(
+        miri.center_ra_deg,
+        miri.center_dec_deg,
+    )
+    overlap = miri.sky_polygon_arcsec.intersection(ref_sky)
+    return (
+        miri.metrics_from_sky_arcsec2(polygon_area(overlap)).pixels2,
+        miri.sky_polygon_arcsec,
+        ref_sky,
+    )
 
 
 def find_best_refs(
