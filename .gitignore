@@ -30,3 +30,5 @@ plots.ipynb
 bug.ipynb
 process_data.ipynb
 frb.ipynb
+# Local Cursor rules/hooks (keep untracked)
+.cursor/

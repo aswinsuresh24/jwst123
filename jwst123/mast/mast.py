@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from typing import Iterable, Optional, Sequence
 
 import numpy as np
@@ -258,9 +259,25 @@ def collect_hst_products(obs_table: Table) -> Optional[Table]:
     return productlist
 
 
-def filter_jwst_products(product_list: Table, stage: int = 2) -> Table:
+def normalize_filter_name(filt: str) -> str:
+    """Turn MAST filter strings like ``F560W;CLEAR`` into a directory name."""
+    name = str(filt).split(';')[0].strip().upper()
+    name = re.sub(r'[^A-Z0-9_\-]+', '_', name)
+    return name or 'UNKNOWN'
+
+
+def filter_jwst_products(
+    product_list: Table,
+    stage: int = 2,
+    *,
+    mirimage_only: bool = False,
+) -> Table:
     """Filter JWST products to science CAL (stage 2) or I2D (stage 3) files."""
     masks = [[str(p).upper() == 'SCIENCE' for p in product_list['productType']]]
+    if mirimage_only:
+        masks.append(
+            ['mirimage' in str(name).lower() for name in product_list['productFilename']]
+        )
     if stage == 2:
         masks.append([t == 'CAL' for t in product_list['productSubGroupDescription']])
         masks.append([c == 2 for c in product_list['calib_level']])
@@ -272,12 +289,39 @@ def filter_jwst_products(product_list: Table, stage: int = 2) -> Table:
     return product_list[_combine_masks(masks)]
 
 
+def observation_download_subdir(
+    filt: str,
+    obsid: object,
+    layout: str = 'filter_obsid',
+) -> str:
+    """
+    Return the per-observation subdirectory under the download root.
+
+    ``filter_obsid`` (default legacy): ``<FILTER>_<obsid>``
+    ``filter/obsid``: ``<FILTER>/<obsid>`` (preferred by ``alignment_wrap``)
+    """
+    filt_name = normalize_filter_name(filt)
+    obsid_s = str(obsid)
+    if layout in ('filter/obsid', 'filter_dir'):
+        return os.path.join(filt_name, obsid_s)
+    if layout in ('filter_obsid', 'legacy'):
+        return f'{filt_name}_{obsid_s}'
+    raise ValueError(
+        f'Unsupported download layout {layout!r}; '
+        "use 'filter_obsid' or 'filter/obsid'"
+    )
+
+
 def download_jwst_observations(
     obs_table: Table,
     outdir: str,
     stage: int = 2,
     extension: str = 'fits',
     token: Optional[str] = None,
+    *,
+    layout: str = 'filter_obsid',
+    mirimage_only: bool = False,
+    dry_run: bool = False,
 ) -> int:
     """
     Download filtered JWST products for each observation into ``outdir``.
@@ -285,10 +329,20 @@ def download_jwst_observations(
     Pass ``token`` (or set ``MAST_API_TOKEN``) to authenticate before downloading
     proprietary products, matching the hst123 ``Observations.login`` flow.
 
+    Parameters
+    ----------
+    layout : str
+        ``filter_obsid`` → ``<outdir>/<FILTER>_<obsid>/mastDownload/...``
+        ``filter/obsid`` → ``<outdir>/<FILTER>/<obsid>/mastDownload/...``
+    mirimage_only : bool
+        If True, keep only ``*mirimage*`` product filenames (MIRI imager).
+    dry_run : bool
+        If True, list products without downloading.
+
     Returns
     -------
     int
-        Number of observation product sets downloaded.
+        Number of observation product sets downloaded (or listed in dry-run).
     """
     resolved = resolve_mast_token(token)
     if resolved:
@@ -302,25 +356,37 @@ def download_jwst_observations(
     n_obs = len(obs_table)
     n_downloaded = 0
     print(f'Downloading JWST products for {n_obs} observation(s) into {outdir}')
+    if dry_run:
+        print('Dry run: no files will be downloaded')
 
     for i, obs in enumerate(obs_table, start=1):
-        filt = str(obs['filters']).replace(';', '_')
+        filt = obs['filters']
         obsid = obs['obsid']
+        subdir = observation_download_subdir(filt, obsid, layout=layout)
         try:
             product_list = filter_jwst_products(
-                Observations.get_product_list(obs), stage=stage
+                Observations.get_product_list(obs),
+                stage=stage,
+                mirimage_only=mirimage_only,
             )
         except Exception as exc:
             print(f'WARNING: could not get products for obsid={obsid}: {exc}')
             continue
         if len(product_list) == 0:
-            print(f'[{i}/{n_obs}] {filt}_{obsid}: no stage-{stage} science products')
+            print(f'[{i}/{n_obs}] {subdir}: no stage-{stage} science products')
             continue
-        download_dir = os.path.join(outdir, f'{filt}_{obsid}')
+        download_dir = os.path.join(outdir, subdir)
         os.makedirs(download_dir, exist_ok=True)
         print(
-            f'[{i}/{n_obs}] {filt}_{obsid}: downloading {len(product_list)} product(s)...'
+            f'[{i}/{n_obs}] {subdir}: '
+            f'{"listing" if dry_run else "downloading"} '
+            f'{len(product_list)} product(s)...'
         )
+        for row in product_list:
+            print(f'    {row["productFilename"]}')
+        if dry_run:
+            n_downloaded += 1
+            continue
         try:
             Observations.download_products(
                 product_list, download_dir=download_dir, extension=extension
