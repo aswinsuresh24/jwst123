@@ -16,7 +16,7 @@ from pathlib import Path
 import numpy as np
 from astropy.io import fits
 
-from jwst123.illuminated_s_region import SRegionPolygon
+from jwst123.mosaic.region import SRegionPolygon
 
 
 # Approximate MIRI filter central wavelengths (microns), blue → red.

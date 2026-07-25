@@ -8,7 +8,7 @@ from unittest.mock import patch
 import numpy as np
 from astropy.table import Table
 
-from jwst123.mosaic import create_dirs, edit_spec_groups, mp_init, update_path
+from jwst123.mosaic.mosaic import create_dirs, edit_spec_groups, mp_init, update_path
 from jwst123.scripts import apply_gwcs as apply_gwcs_script
 from jwst123.scripts import mosaic as mosaic_script
 
@@ -46,11 +46,11 @@ def test_edit_spec_groups(tmp_path: Path):
 
 def test_mp_init_sets_globals():
     mp_init(1, 2, ['a.fits'])
-    import jwst123.mosaic as mosaic
+    import jwst123.mosaic.mosaic as mosaic_mod
 
-    assert mosaic.success == 1
-    assert mosaic.failed == 2
-    assert mosaic.success_files == ['a.fits']
+    assert mosaic_mod.success == 1
+    assert mosaic_mod.failed == 2
+    assert mosaic_mod.success_files == ['a.fits']
 
 
 def test_mosaic_parser():

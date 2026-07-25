@@ -561,7 +561,7 @@ def find_frame_overlaps(
 
         overlapping.sort(key=lambda r: r.overlap_area.pixels2, reverse=True)
 
-        from jwst123.image_overlap import compute_cumulative_overlap_fraction
+        from jwst123.mosaic.image_overlap import compute_cumulative_overlap_fraction
 
         union_frac = compute_cumulative_overlap_fraction(
             miri, [r.ref_path for r in overlapping]
@@ -852,7 +852,7 @@ def _frame_ref_overlap_frac(frame: FrameOverlaps | dict) -> float:
 
     if not ref_images:
         return 0.0
-    from jwst123.image_overlap import MirIFootprint, compute_cumulative_overlap_fraction
+    from jwst123.mosaic.image_overlap import MirIFootprint, compute_cumulative_overlap_fraction
 
     return compute_cumulative_overlap_fraction(
         MirIFootprint.from_fits(miri_path), ref_images

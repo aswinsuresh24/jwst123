@@ -273,7 +273,7 @@ def main(argv: list[str] | None = None) -> int:
         socket.setdefaulttimeout(15)
 
     from jwst123.alignment.relative_align import run_alignment
-    from jwst123.image_overlap import BestOverlap, MirIFootprint, compute_overlap
+    from jwst123.mosaic.image_overlap import BestOverlap, MirIFootprint, compute_overlap
 
     args = create_parser(default_data_dir).parse_args(argv)
     args.repo = repo

@@ -10,7 +10,7 @@ from multiprocessing import Pool
 
 import numpy as np
 
-from jwst123.mosaic import (
+from jwst123.mosaic.mosaic import (
     apply_nircammask,
     calc_sky,
     coadd,

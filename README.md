@@ -27,15 +27,18 @@ building mosaics / coadds, and preparing DOLPHOT runs.
 | `jwst123.alignment.alignment_fallback` | MIRI→MIRI parent ranking and provenance |
 | `jwst123.alignment.alignment_parallel` | Spawn-safe REFERENCE / MIRI_REL workers |
 | `jwst123.alignment.calibrators` | Per-filter JHAT/refine knobs and quality-hold thresholds |
-| `jwst123.mosaic` | Overlap splitting, PSF matching, coadds, GWCS, DOLPHOT prep |
+| `jwst123.mosaic` | Footprints, overlap, Level-3 mosaics / coadds / GWCS / DOLPHOT prep |
+| `jwst123.mosaic.region` | Illuminated footprint / `S_REGION` from science+DQ |
+| `jwst123.mosaic.image_overlap` | Science vs reference footprint overlap |
+| `jwst123.mosaic.mosaic` | Overlap splitting, PSF matching, coadds, GWCS, DOLPHOT prep |
 | `jwst123.mast` | MAST query and download helpers (`mast`, `download` submodules) |
+| `jwst123.photometry` | Per-image / combined photometry catalog helpers |
+| `jwst123.photometry.catalog` | DOLPHOT column mapping and combined catalogs |
 | `jwst123.utils` | Shared utilities package (helpers, settings, link, constants) |
 | `jwst123.utils.helpers` | Coordinates, FITS bookkeeping, visits, xmatch |
 | `jwst123.utils.settings` | JHAT and DOLPHOT parameter sets |
 | `jwst123.utils.link` | Symlink helpers for reduction ``raw/`` trees |
 | `jwst123.utils.constants` | ANSI color strings for CLI messages |
-| `jwst123.illuminated_s_region` | Illuminated footprint / `S_REGION` from science+DQ |
-| `jwst123.image_overlap` | MIRI vs reference footprint overlap |
 
 ### Scripts
 
@@ -48,7 +51,7 @@ building mosaics / coadds, and preparing DOLPHOT runs.
 | `jwst123/scripts/mosaic.py` | Mosaic / coadd / DOLPHOT prep |
 | `jwst123/scripts/link_raw.py` | Symlink FITS into a reduction `raw/` directory |
 | `jwst123/scripts/image_overlap.py` | Maximum-overlap reference selection |
-| `jwst123/scripts/illuminated_s_region.py` | Illuminated `S_REGION` CLI |
+| `jwst123/scripts/region.py` | Illuminated `S_REGION` CLI |
 | `jwst123/scripts/apply_gwcs.py` | Attach GWCS to coadd datamodels |
 | `jwst123/scripts/catalog.py` | Combined photometry catalog CLI |
 
@@ -221,7 +224,7 @@ Useful options:
 | `--instruments` | `NIRCAM MIRI` | Instrument name filters |
 | `--token` | `MAST_API_TOKEN` / `MAST_TOKEN` | MAST API token for proprietary data |
 
-After install, console scripts from `pyproject.toml` are available (`download`, `align`, `mosaic`, `link-raw`, `image-overlap`, `illuminated-s-region`, `relative-align`, `apply-gwcs`, `catalog`).
+After install, console scripts from `pyproject.toml` are available (`download`, `align`, `mosaic`, `link-raw`, `image-overlap`, `region`, `illuminated-s-region`, `relative-align`, `apply-gwcs`, `catalog`).
 
 ### Stage files for a reduction
 

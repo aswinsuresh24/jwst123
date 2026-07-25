@@ -22,7 +22,7 @@ from jwst123.alignment.calibrators import (
     calibrator_settings_for_filter,
     max_reference_dispersion_mas,
 )
-from jwst123.image_overlap import (
+from jwst123.mosaic.image_overlap import (
     BestOverlap,
     MirIFootprint,
     ScienceFootprint,

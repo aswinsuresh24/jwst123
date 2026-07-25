@@ -7,7 +7,7 @@ import argparse
 import glob
 import sys
 
-from jwst123.mosaic import apply_wcs_to_coadd
+from jwst123.mosaic.mosaic import apply_wcs_to_coadd
 
 
 def create_parser() -> argparse.ArgumentParser:

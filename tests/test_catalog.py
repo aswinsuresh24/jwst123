@@ -1,4 +1,4 @@
-"""Tests for catalog script and jwst123.catalog helpers."""
+"""Tests for catalog script and jwst123.photometry.catalog helpers."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from unittest.mock import patch
 import numpy as np
 import pandas as pd
 
-from jwst123.catalog import get_filters, map_columns
+from jwst123.photometry.catalog import get_filters, map_columns
 from jwst123.scripts import catalog as catalog_script
 
 

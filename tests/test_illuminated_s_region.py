@@ -8,14 +8,14 @@ from unittest.mock import patch
 import numpy as np
 import pytest
 
-from jwst123.illuminated_s_region import (
+from jwst123.mosaic.region import (
     SRegionPolygon,
     default_adjacency_pixels,
     illuminated_mask_from_dq,
     illuminated_s_region_from_fits,
     select_right_illuminated_component,
 )
-from jwst123.scripts import illuminated_s_region as illum_script
+from jwst123.scripts import region as illum_script
 from helpers import write_illuminated_fits
 
 
@@ -64,7 +64,7 @@ def test_illuminated_script_main(tmp_path: Path, monkeypatch):
     path = write_illuminated_fits(tmp_path / 'science.fits')
     out = tmp_path / 'plot.png'
     monkeypatch.setattr(illum_script.plt, 'close', lambda *a, **k: None)
-    with patch('jwst123.scripts.illuminated_s_region.save_illuminated_region_plot') as mock_plot:
+    with patch('jwst123.scripts.region.save_illuminated_region_plot') as mock_plot:
         rc = illum_script.main(
             [str(path), '--output', str(out), '--simplify', '1.0', '--adjacency', '5']
         )

@@ -9,7 +9,7 @@ import glob
 import numpy as np
 import pandas as pd
 
-from jwst123.catalog import create_common_catalog
+from jwst123.photometry.catalog import create_common_catalog
 
 
 def create_parser() -> argparse.ArgumentParser:

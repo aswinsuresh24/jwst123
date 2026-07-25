@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import argparse
 
-from jwst123.image_overlap import find_best_refs
+from jwst123.mosaic.image_overlap import find_best_refs
 
 
 def create_parser() -> argparse.ArgumentParser:

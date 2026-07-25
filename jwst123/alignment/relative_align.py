@@ -300,7 +300,7 @@ def clip_catalog_to_miri_footprint(table: Table, miri_image: str) -> Table:
     occur when the merged master catalog contains stars far outside the MIRI
     WCS validity domain (common once several large reference coadds are merged).
     """
-    from jwst123.image_overlap import MirIFootprint
+    from jwst123.mosaic.image_overlap import MirIFootprint
     from matplotlib.path import Path as MplPath
 
     miri = MirIFootprint.from_fits(miri_image)
