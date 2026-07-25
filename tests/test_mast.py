@@ -56,7 +56,7 @@ def test_mast_login_required_without_token(monkeypatch):
 
 def test_mast_login_success(monkeypatch):
     monkeypatch.delenv('MAST_API_TOKEN', raising=False)
-    with patch('jwst123.mast.Observations.login') as mock_login:
+    with patch('jwst123.mast.mast.Observations.login') as mock_login:
         assert mast_login('tok123', required=True) is True
         mock_login.assert_called_once_with(token='tok123')
 

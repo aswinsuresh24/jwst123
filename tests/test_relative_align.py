@@ -67,7 +67,7 @@ def test_relative_align_main_success(tmp_path: Path):
     fits.PrimaryHDU(np.ones((5, 5))).writeto(ref)
     fits.PrimaryHDU(np.ones((5, 5))).writeto(align)
     with patch(
-        'jwst123.scripts.relative_align.run_alignment',
+        'jwst123.alignment.relative_align.run_alignment',
         return_value=((0.1, -0.2), str(tmp_path / 'out')),
     ):
         rc = rel.main(

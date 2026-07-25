@@ -2,8 +2,9 @@
 jwst123: JWST download, JHAT alignment, mosaicking, and DOLPHOT helpers.
 """
 
-from jwst123.align import (
+from jwst123.alignment import (
     add_bin_dq,
+    align_from_frames,
     align_jwst_image,
     align_to_mosaic,
     calc_dispersion,
@@ -14,11 +15,14 @@ from jwst123.align import (
     jwst_dispersion,
     jwst_phot,
     query_gaia,
+    run_alignment,
     run_jhat,
+    run_overlaps,
 )
 
 __all__ = [
     'add_bin_dq',
+    'align_from_frames',
     'align_jwst_image',
     'align_to_mosaic',
     'calc_dispersion',
@@ -29,7 +33,9 @@ __all__ = [
     'jwst_dispersion',
     'jwst_phot',
     'query_gaia',
+    'run_alignment',
     'run_jhat',
+    'run_overlaps',
 ]
 
 __version__ = '0.1.0'

@@ -10,7 +10,7 @@ import os
 import numpy as np
 import shapely
 
-from jwst123.align import (
+from jwst123.alignment.align import (
     align_to_mosaic,
     create_alignment_mosaic,
     create_dirs,
@@ -21,7 +21,7 @@ from jwst123.align import (
     update_refcat,
     visit_filter_dict,
 )
-from jwst123.utils import create_filter_table, input_list
+from jwst123.utils.helpers import create_filter_table, input_list
 
 
 def create_parser() -> argparse.ArgumentParser:

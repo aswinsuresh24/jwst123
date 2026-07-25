@@ -41,8 +41,63 @@ class SRegionPolygon:
         )
         return f"POLYGON {self.frame} {coord_text}"
 
-    def to_pixel_polygon(self, wcs: WCS) -> Polygon:
-        x, y = wcs.world_to_pixel_values(self.vertices[:, 0], self.vertices[:, 1])
+    def to_tangent_polygon(
+        self,
+        center_ra_deg: float,
+        center_dec_deg: float,
+    ) -> Polygon:
+        """
+        Project vertices into a local tangent plane centered on ``(ra, dec)``.
+
+        Coordinates are offsets in arcseconds (east, north). This is the safe
+        geometry for footprint intersection: unlike WCS pixel projection, it
+        does not invent detector-plane coordinates for far off-axis sky positions.
+        """
+        ra = np.asarray(self.vertices[:, 0], dtype=float)
+        dec = np.asarray(self.vertices[:, 1], dtype=float)
+        dra = (ra - float(center_ra_deg)) * np.cos(np.deg2rad(float(center_dec_deg)))
+        ddec = dec - float(center_dec_deg)
+        return Polygon(np.column_stack([dra * 3600.0, ddec * 3600.0]))
+
+    def to_pixel_polygon(
+        self,
+        wcs: WCS,
+        *,
+        max_roundtrip_arcsec: float = 1.0,
+    ) -> Polygon:
+        """
+        Project vertices into ``wcs`` pixel coordinates.
+
+        Rejects projections whose sky→pixel→sky round-trip exceeds
+        ``max_roundtrip_arcsec`` so far off-axis vertices are not treated as
+        valid detector-plane footprint corners.
+        """
+        ra0 = np.asarray(self.vertices[:, 0], dtype=float)
+        dec0 = np.asarray(self.vertices[:, 1], dtype=float)
+        xy = np.asarray(wcs.all_world2pix(ra0, dec0, 0, quiet=True))
+        if xy.ndim != 2:
+            raise ValueError("Unexpected all_world2pix return shape for S_REGION")
+        if xy.shape[0] == 2 and xy.shape[1] != 2:
+            x, y = np.asarray(xy[0], dtype=float), np.asarray(xy[1], dtype=float)
+        else:
+            x, y = np.asarray(xy[:, 0], dtype=float), np.asarray(xy[:, 1], dtype=float)
+
+        if not (np.all(np.isfinite(x)) and np.all(np.isfinite(y))):
+            raise ValueError(
+                "S_REGION vertices fall outside the WCS validity domain "
+                "(non-finite pixel coordinates)"
+            )
+
+        ra1, dec1 = wcs.all_pix2world(x, y, 0)
+        dra = (np.asarray(ra1, dtype=float) - ra0) * np.cos(np.deg2rad(dec0))
+        ddec = np.asarray(dec1, dtype=float) - dec0
+        err_arcsec = np.hypot(dra, ddec) * 3600.0
+        if np.any(err_arcsec > max_roundtrip_arcsec):
+            raise ValueError(
+                "S_REGION vertices fall outside the WCS validity domain "
+                f"(max sky round-trip {float(np.nanmax(err_arcsec)):.1f} arcsec "
+                f"> {max_roundtrip_arcsec} arcsec)"
+            )
         return Polygon(np.column_stack([x, y]))
 
 

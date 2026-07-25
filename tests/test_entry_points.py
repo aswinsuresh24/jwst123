@@ -9,24 +9,28 @@ import pytest
 
 EXPECTED_SCRIPTS = {
     'download': 'jwst123.scripts.download:main',
+    'jwst-download': 'jwst123.scripts.download:main_jwst_download',
     'align': 'jwst123.scripts.align:main',
     'mosaic': 'jwst123.scripts.mosaic:main',
     'link-raw': 'jwst123.scripts.link_raw:main',
     'image-overlap': 'jwst123.scripts.image_overlap:main',
     'illuminated-s-region': 'jwst123.scripts.illuminated_s_region:main',
     'relative-align': 'jwst123.scripts.relative_align:main',
+    'alignment-wrap': 'jwst123.scripts.alignment_wrap:main',
     'apply-gwcs': 'jwst123.scripts.apply_gwcs:main',
     'catalog': 'jwst123.scripts.catalog:main',
 }
 
 SCRIPT_MODULES = [
     'jwst123.scripts.download',
+    'jwst123.scripts.jwst_download',
     'jwst123.scripts.align',
     'jwst123.scripts.mosaic',
     'jwst123.scripts.link_raw',
     'jwst123.scripts.image_overlap',
     'jwst123.scripts.illuminated_s_region',
     'jwst123.scripts.relative_align',
+    'jwst123.scripts.alignment_wrap',
     'jwst123.scripts.apply_gwcs',
     'jwst123.scripts.catalog',
 ]

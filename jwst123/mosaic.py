@@ -1,5 +1,5 @@
 import glob, os
-from jwst123.utils import input_list, create_filter_table
+from jwst123.utils.helpers import create_filter_table, input_list
 import numpy as np
 from multiprocessing import Pool
 from jwst.pipeline import calwebb_image3
@@ -35,9 +35,9 @@ from photutils.psf.matching import SplitCosineBellWindow, create_matching_kernel
 from astropy.convolution import convolve, convolve_fft
 from reproject.mosaicking import find_optimal_celestial_wcs
 import subprocess
-from jwst123.utils import get_detector_chip
+from jwst123.utils.helpers import get_detector_chip
 from jwst123.mast import parse_s_region
-from jwst123.settings import *
+from jwst123.utils.settings import *  # noqa: F403
 
 
 def mp_init(init_success: int = 0,

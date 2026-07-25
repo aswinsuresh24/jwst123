@@ -25,7 +25,7 @@ from jwst123.mosaic import (
     split_observations,
     update_path,
 )
-from jwst123.utils import input_list
+from jwst123.utils.helpers import input_list
 
 
 def create_parser() -> argparse.ArgumentParser:

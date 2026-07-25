@@ -7,10 +7,12 @@ import warnings
 from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
 from astropy import units as u
 from astropy.io import fits
 from astropy.wcs import WCS
 from shapely.geometry import Polygon
+from shapely.ops import unary_union
 
 from jwst123.illuminated_s_region import SRegionPolygon, illuminated_s_region_from_fits
 
@@ -39,6 +41,11 @@ class AreaMetrics:
             fraction_of_roi=frac,
         )
 
+    @property
+    def fraction_of_miri_roi(self) -> float:
+        """Alias used by the MIRI alignment pipeline."""
+        return self.fraction_of_roi
+
     def format(self) -> str:
         return (
             f'{self.pixels2:.3f} pixels^2 | {self.arcmin2:.6f} arcmin^2 | '
@@ -48,13 +55,16 @@ class AreaMetrics:
 
 @dataclass(frozen=True)
 class ScienceFootprint:
-    """Illuminated science footprint projected into the science WCS pixel plane."""
+    """Illuminated science footprint (sky S_REGION + on-detector pixel polygon)."""
 
     path: str
     s_region: SRegionPolygon
     wcs: WCS
     polygon: Polygon
     pixel_area_arcmin2: float
+    center_ra_deg: float
+    center_dec_deg: float
+    sky_polygon_arcsec: Polygon
 
     @property
     def area(self) -> AreaMetrics:
@@ -64,9 +74,16 @@ class ScienceFootprint:
             self.polygon.area,
         )
 
+    @property
+    def pixel_area_arcsec2(self) -> float:
+        return self.pixel_area_arcmin2 * 3600.0
+
     @classmethod
     def from_fits(cls, path: str) -> ScienceFootprint:
         s_region, _, wcs, _, _, _ = illuminated_s_region_from_fits(path)
+        verts = np.asarray(s_region.vertices, dtype=float)
+        center_ra = float(np.mean(verts[:, 0]))
+        center_dec = float(np.mean(verts[:, 1]))
         return cls(
             path=path,
             s_region=s_region,
@@ -75,6 +92,9 @@ class ScienceFootprint:
             pixel_area_arcmin2=float(
                 wcs.proj_plane_pixel_area().to(u.arcmin**2).value
             ),
+            center_ra_deg=center_ra,
+            center_dec_deg=center_dec,
+            sky_polygon_arcsec=s_region.to_tangent_polygon(center_ra, center_dec),
         )
 
     def metrics(self, area_pix2: float) -> AreaMetrics:
@@ -82,6 +102,19 @@ class ScienceFootprint:
             area_pix2,
             self.pixel_area_arcmin2,
             float(self.polygon.area),
+        )
+
+    def metrics_from_sky_arcsec2(self, area_arcsec2: float) -> AreaMetrics:
+        """Convert a tangent-plane area (arcsec²) into science-pixel AreaMetrics."""
+        pix_area = self.pixel_area_arcsec2
+        area_pix2 = float(area_arcsec2) / pix_area if pix_area > 0 else 0.0
+        roi_pix2 = (
+            float(self.sky_polygon_arcsec.area) / pix_area if pix_area > 0 else 0.0
+        )
+        return AreaMetrics.from_pixels(
+            area_pix2,
+            self.pixel_area_arcmin2,
+            roi_pix2,
         )
 
 
@@ -107,6 +140,11 @@ class BestOverlap:
     ref_path: str | None
     overlap_area: AreaMetrics
 
+    @property
+    def miri_path(self) -> str:
+        """Alias used by the MIRI alignment pipeline."""
+        return self.science_path
+
 
 def load_header_s_region(fits_path: str, extname: str = 'SCI') -> SRegionPolygon:
     """Parse S_REGION from a FITS science header."""
@@ -120,25 +158,59 @@ def polygon_area(polygon: Polygon) -> float:
 
 
 def compute_overlap(science: ScienceFootprint, ref_path: str) -> OverlapResult:
-    """Project a reference S_REGION into science pixels and compute overlap."""
+    """
+    Compute footprint overlap in a local sky tangent plane.
+
+    Intersection is performed on ``S_REGION`` polygons expressed as
+    arcsecond offsets from the science footprint center. Reported areas are
+    converted to science pixels² via the science pixel solid angle.
+    """
     ref_s_region = load_header_s_region(ref_path)
-    ref_poly = ref_s_region.to_pixel_polygon(science.wcs)
-    overlap_poly = science.polygon.intersection(ref_poly)
-    roi_area = float(science.polygon.area)
+    ref_sky = ref_s_region.to_tangent_polygon(
+        science.center_ra_deg,
+        science.center_dec_deg,
+    )
+    overlap_sky = science.sky_polygon_arcsec.intersection(ref_sky)
     return OverlapResult(
         ref_path=ref_path,
         ref_s_region=ref_s_region,
-        ref_area=AreaMetrics.from_pixels(
-            float(ref_poly.area),
-            science.pixel_area_arcmin2,
-            roi_area,
-        ),
-        overlap_area=AreaMetrics.from_pixels(
-            polygon_area(overlap_poly),
-            science.pixel_area_arcmin2,
-            roi_area,
-        ),
+        ref_area=science.metrics_from_sky_arcsec2(polygon_area(ref_sky)),
+        overlap_area=science.metrics_from_sky_arcsec2(polygon_area(overlap_sky)),
     )
+
+
+def compute_cumulative_overlap_fraction(
+    science: ScienceFootprint,
+    ref_paths: list[str],
+) -> float:
+    """
+    Fraction of the science illuminated ROI covered by the union of references.
+
+    Overlapping reference footprints are merged (unique area only) before
+    dividing by the science sky footprint area. Returns 0.0 when there is no
+    overlap.
+    """
+    science_area = polygon_area(science.sky_polygon_arcsec)
+    if science_area <= 0.0 or not ref_paths:
+        return 0.0
+
+    pieces = []
+    for ref_path in ref_paths:
+        try:
+            ref_s_region = load_header_s_region(ref_path)
+            ref_sky = ref_s_region.to_tangent_polygon(
+                science.center_ra_deg,
+                science.center_dec_deg,
+            )
+            overlap_sky = science.sky_polygon_arcsec.intersection(ref_sky)
+        except Exception:
+            continue
+        if not overlap_sky.is_empty and polygon_area(overlap_sky) > 0.0:
+            pieces.append(overlap_sky)
+
+    if not pieces:
+        return 0.0
+    return float(polygon_area(unary_union(pieces)) / science_area)
 
 
 def overlap_area_pixels(
@@ -146,15 +218,22 @@ def overlap_area_pixels(
     ref_image: str,
 ) -> tuple[float, Polygon, Polygon]:
     """
-    Return overlap area (science pixels²) and the two pixel-plane polygons.
+    Return overlap area (science pixels²) and the two sky-tangent polygons.
 
-    Kept for programmatic reuse of the previous API.
+    Polygons are in local tangent-plane arcseconds (not detector pixels).
     """
     science = ScienceFootprint.from_fits(science_image)
     ref_s_region = load_header_s_region(ref_image)
-    ref_poly = ref_s_region.to_pixel_polygon(science.wcs)
-    overlap = science.polygon.intersection(ref_poly)
-    return polygon_area(overlap), science.polygon, ref_poly
+    ref_sky = ref_s_region.to_tangent_polygon(
+        science.center_ra_deg,
+        science.center_dec_deg,
+    )
+    overlap = science.sky_polygon_arcsec.intersection(ref_sky)
+    return (
+        science.metrics_from_sky_arcsec2(polygon_area(overlap)).pixels2,
+        science.sky_polygon_arcsec,
+        ref_sky,
+    )
 
 
 def find_best_refs(

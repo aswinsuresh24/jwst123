@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from jwst123.link import create_symlink, remove_proc_files
+from jwst123.utils.link import create_symlink, remove_proc_files
 from jwst123.scripts import link_raw
 
 

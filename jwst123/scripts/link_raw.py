@@ -7,7 +7,7 @@ import argparse
 import glob
 import os
 
-from jwst123.link import create_symlink, remove_proc_files
+from jwst123.utils.link import create_symlink, remove_proc_files
 
 
 def create_parser() -> argparse.ArgumentParser:

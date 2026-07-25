@@ -5,10 +5,12 @@ from __future__ import annotations
 import os
 import sys
 from contextlib import contextmanager
+from pathlib import Path
+from typing import Optional, Sequence
 
-
-from jwst123.mast import (
+from jwst123.mast.mast import (
     download_jwst_observations,
+    normalize_filter_name,
     query_jwst,
     resolve_mast_token,
 )
@@ -26,8 +28,6 @@ def suppress_stdout():
         finally:
             sys.stdout = old_stdout
             sys.stderr = old_stderr
-
-
 
 
 def resolve_outdir(obj, outdir=None):
@@ -51,7 +51,19 @@ def resolve_outdir(obj, outdir=None):
     return outdir
 
 
-def query_mast_jwst(coord, outdir, radius, stage=2, token=None, instruments=None):
+def query_mast_jwst(
+    coord,
+    outdir,
+    radius,
+    stage=2,
+    token=None,
+    instruments=None,
+    *,
+    layout: str = 'filter_obsid',
+    mirimage_only: bool = False,
+    dry_run: bool = False,
+    allowed_filters: Optional[Sequence[str]] = None,
+):
     '''
     Query MAST and download available JWST imaging.
 
@@ -70,6 +82,14 @@ def query_mast_jwst(coord, outdir, radius, stage=2, token=None, instruments=None
         with ``Observations.login`` and includes proprietary observations.
     instruments : sequence of str or None
         Instrument name substrings (e.g. NIRCAM, MIRI). None uses defaults.
+    layout : str
+        Per-observation directory layout (``filter_obsid`` or ``filter/obsid``).
+    mirimage_only : bool
+        Restrict products to MIRI imager ``*mirimage*`` files.
+    dry_run : bool
+        List matching products without downloading.
+    allowed_filters : sequence of str or None
+        Optional filter whitelist (e.g. ``F560W``).
 
     Returns:
     -------
@@ -83,11 +103,60 @@ def query_mast_jwst(coord, outdir, radius, stage=2, token=None, instruments=None
         kwargs['instruments'] = instruments
 
     obs_table = query_jwst(coord, **kwargs)
+    if allowed_filters:
+        wanted = {normalize_filter_name(f) for f in allowed_filters}
+        keep = [
+            normalize_filter_name(f) in wanted for f in obs_table['filters']
+        ]
+        obs_table = obs_table[keep]
+
     print(f'Found {len(obs_table)} JWST observation(s)')
     if len(obs_table) == 0:
         return 0
 
     # Pass token again so download authenticates even if called standalone.
     return download_jwst_observations(
-        obs_table, outdir=outdir, stage=stage, token=token
+        obs_table,
+        outdir=outdir,
+        stage=stage,
+        token=token,
+        layout=layout,
+        mirimage_only=mirimage_only,
+        dry_run=dry_run,
+    )
+
+
+def query_and_download_miri(
+    coord,
+    *,
+    download_dir: str | Path,
+    radius,
+    stage: int = 2,
+    obj: str = 'target',
+    allowed_filters: Optional[Sequence[str]] = None,
+    dry_run: bool = False,
+    token: Optional[str] = None,
+) -> int:
+    """
+    Download public MIRI imager products into ``<download_dir>/<FILTER>/<obsid>/``.
+
+    This matches the ``jwst_RSGs`` ``jwst_download.py`` layout expected by
+    ``alignment_wrap``.
+    """
+    download_dir = Path(download_dir).expanduser().resolve()
+    print(f'Target: {obj}')
+    print(f'Coordinates: {coord.to_string("hmsdms")}')
+    print(f'Search radius: {radius}')
+    print(f'Download directory: {download_dir}')
+    return query_mast_jwst(
+        coord,
+        outdir=str(download_dir),
+        radius=radius,
+        stage=stage,
+        token=token,
+        instruments=('MIRI',),
+        layout='filter/obsid',
+        mirimage_only=True,
+        dry_run=dry_run,
+        allowed_filters=allowed_filters,
     )

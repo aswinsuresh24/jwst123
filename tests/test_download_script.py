@@ -8,10 +8,15 @@ import pytest
 from astropy import units as u
 from astropy.coordinates import SkyCoord
 
-from jwst123.download import query_mast_jwst, resolve_outdir
-from jwst123.mast import resolve_mast_token
+from jwst123.mast import (
+    normalize_filter_name,
+    observation_download_subdir,
+    query_mast_jwst,
+    resolve_mast_token,
+    resolve_outdir,
+)
 from jwst123.scripts import download as download_script
-from jwst123.util import is_number, parse_coord
+from jwst123.utils import is_number, parse_coord
 
 
 def test_resolve_outdir_default_and_explicit(tmp_path):
@@ -50,9 +55,9 @@ def test_query_mast_jwst_empty_table(tmp_path):
     coord = SkyCoord(150.0, 2.0, unit='deg')
     outdir = tmp_path / 'dl'
     with (
-        patch('jwst123.download.resolve_mast_token', return_value=None),
-        patch('jwst123.download.query_jwst', return_value=Table()),
-        patch('jwst123.download.download_jwst_observations') as mock_dl,
+        patch('jwst123.mast.download.resolve_mast_token', return_value=None),
+        patch('jwst123.mast.download.query_jwst', return_value=Table()),
+        patch('jwst123.mast.download.download_jwst_observations') as mock_dl,
     ):
         n = query_mast_jwst(coord, str(outdir), radius=3 * u.arcmin)
     assert n == 0
@@ -69,6 +74,40 @@ def test_download_parser_requires_core_args():
     )
     assert args.obj == 'TEST'
     assert args.radius == 1.5
+
+
+def test_miri_download_layout_and_filter_normalization():
+    assert normalize_filter_name('F560W;CLEAR') == 'F560W'
+    assert observation_download_subdir('F560W;CLEAR', 123, layout='filter_obsid') == (
+        'F560W_123'
+    )
+    assert observation_download_subdir('F560W', 123, layout='filter/obsid') == (
+        'F560W/123'
+    )
+
+
+def test_download_parser_accepts_download_dir_and_layout():
+    parser = download_script.create_parser()
+    args = parser.parse_args(
+        [
+            '--ra',
+            '150.0',
+            '--dec',
+            '2.0',
+            '--obj',
+            'TEST',
+            '--download-dir',
+            '/tmp/out',
+            '--layout',
+            'filter/obsid',
+            '--instruments',
+            'MIRI',
+            '--dry-run',
+        ]
+    )
+    assert args.download_dir == '/tmp/out'
+    assert args.layout == 'filter/obsid'
+    assert args.dry_run is True
 
 
 def test_download_main_success(monkeypatch, tmp_path):

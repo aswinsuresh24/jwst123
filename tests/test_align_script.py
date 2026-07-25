@@ -9,7 +9,12 @@ import numpy as np
 from astropy.io import fits
 from astropy.table import Table
 
-from jwst123.align import create_dirs, get_input_images, pick_deepest_image, visit_filter_dict
+from jwst123.alignment.align import (
+    create_dirs,
+    get_input_images,
+    pick_deepest_image,
+    visit_filter_dict,
+)
 from jwst123.scripts import align as align_script
 
 

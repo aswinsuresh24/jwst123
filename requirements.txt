@@ -5,7 +5,10 @@
 #   conda create -n jwst123 python=3.12 pip
 #   conda activate jwst123
 #   conda install -c conda-forge hdf5 blosc pytables -y
-#   pip install -e .
+#   pip install -e ./extdeps/jhat -e .
+#
+# JHAT is NOT pinned here: use the custom build under extdeps/jhat
+# (see extdeps/jhat/README.md). Do not pip install jhat from PyPI for this repo.
 #
 # drizzlepac requires numpy>=2.
 
@@ -28,7 +31,6 @@ photutils==3.0.0
 gwcs==0.26.1
 asdf==5.3.1
 jwst==1.20.2
-jhat==0.3.7
 drizzlepac==3.11.0
 stwcs==1.7.7
 stpsf==2.2.0

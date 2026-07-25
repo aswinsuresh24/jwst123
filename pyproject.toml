@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "jwst123"
 version = "0.1.0"
-description = "JWST download, JHAT alignment, mosaicking, and DOLPHOT helpers."
+description = "JWST download, custom-JHAT alignment, mosaicking, and DOLPHOT helpers."
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
 license = { text = "MIT" }
@@ -49,12 +49,14 @@ Repository = "https://github.com/charliekilpatrick/jwst-nircam"
 # Console entry points live under jwst123.scripts (library code stays in jwst123.*).
 [project.scripts]
 download = "jwst123.scripts.download:main"
+jwst-download = "jwst123.scripts.download:main_jwst_download"
 align = "jwst123.scripts.align:main"
 mosaic = "jwst123.scripts.mosaic:main"
 link-raw = "jwst123.scripts.link_raw:main"
 image-overlap = "jwst123.scripts.image_overlap:main"
 illuminated-s-region = "jwst123.scripts.illuminated_s_region:main"
 relative-align = "jwst123.scripts.relative_align:main"
+alignment-wrap = "jwst123.scripts.alignment_wrap:main"
 apply-gwcs = "jwst123.scripts.apply_gwcs:main"
 catalog = "jwst123.scripts.catalog:main"
 
