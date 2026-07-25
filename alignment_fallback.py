@@ -110,42 +110,80 @@ def sky_overlap_fraction(miri_a: str, miri_b: str) -> float:
     return float(inter.area) / float(pa.area)
 
 
-def select_fallback_parent(
+def rank_fallback_parents(
     miri_path: str,
     filter_name: str,
     successes: list[SuccessfulAlignment],
     *,
-    min_overlap_fraction: float = 1e-6,
-) -> tuple[SuccessfulAlignment | None, float]:
+    min_overlap_fraction: float = 0.05,
+    assume_relative_mas: float = 25.0,
+    wavelength_penalty_mas_per_um: float = 3.5,
+    max_parents: int = 5,
+) -> list[tuple[SuccessfulAlignment, float]]:
     """
-    Choose the best already-aligned MIRI parent for relative fallback.
+    Rank already-aligned MIRI parents for relative fallback.
 
-    Preference order:
-      1. Closest filter wavelength
-      2. Largest sky footprint overlap with ``miri_path``
-      3. Bluer parent when still tied
+    Preference order (among parents with sky overlap ≥ ``min_overlap_fraction``):
+      1. Lowest score
+         ``sqrt(parent_abs² + assume_relative_mas²)
+          + wavelength_penalty_mas_per_um * |Δλ|``
+         — prefers high-quality parents, but not arbitrarily blue ones that
+         often fail relative matching across large wavelength gaps
+      2. Closest filter wavelength
+      3. Largest sky footprint overlap with ``miri_path``
     """
     if not successes:
-        return None, 0.0
+        return []
 
     target_wl = filter_wavelength_um(filter_name)
     ranked: list[tuple[float, float, float, SuccessfulAlignment]] = []
     for parent in successes:
+        if parent.miri_path == miri_path:
+            continue
         try:
             frac = sky_overlap_fraction(miri_path, parent.miri_path)
         except Exception:
             continue
         if frac < min_overlap_fraction:
             continue
+        est_abs = combine_dispersion_mas(
+            float(parent.dispersion_mas), float(assume_relative_mas)
+        )
         dlam = abs(parent.wavelength_um - target_wl)
-        ranked.append((dlam, -frac, parent.wavelength_um, parent))
+        score = est_abs + float(wavelength_penalty_mas_per_um) * dlam
+        ranked.append((score, dlam, -frac, parent))
 
     if not ranked:
-        return None, 0.0
+        return []
     ranked.sort()
-    best = ranked[0][3]
-    best_frac = -ranked[0][1]
-    return best, best_frac
+    out: list[tuple[SuccessfulAlignment, float]] = []
+    for score, dlam, neg_frac, parent in ranked[: max(1, int(max_parents))]:
+        out.append((parent, -neg_frac))
+    return out
+
+
+def select_fallback_parent(
+    miri_path: str,
+    filter_name: str,
+    successes: list[SuccessfulAlignment],
+    *,
+    min_overlap_fraction: float = 0.05,
+    assume_relative_mas: float = 25.0,
+    wavelength_penalty_mas_per_um: float = 3.5,
+) -> tuple[SuccessfulAlignment | None, float]:
+    """Choose the single best fallback parent (see ``rank_fallback_parents``)."""
+    ranked = rank_fallback_parents(
+        miri_path,
+        filter_name,
+        successes,
+        min_overlap_fraction=min_overlap_fraction,
+        assume_relative_mas=assume_relative_mas,
+        wavelength_penalty_mas_per_um=wavelength_penalty_mas_per_um,
+        max_parents=1,
+    )
+    if not ranked:
+        return None, 0.0
+    return ranked[0]
 
 
 def combine_dispersion_mas(parent_mas: float, relative_mas: float) -> float:

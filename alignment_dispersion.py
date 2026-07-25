@@ -506,6 +506,45 @@ def read_dispersion_mas(jhat_image: str) -> tuple[float | None, int | None]:
     return disp_mas, n_cal
 
 
+def read_jhat_pixel_offset(jhat_image: str) -> tuple[float, float]:
+    """Return ``(xshift, yshift)`` pixel offsets from a JHAT product header."""
+    with fits.open(jhat_image) as hdul:
+        hdr = hdul[0].header
+        xoff = hdr.get('XOFFSET', 0.0)
+        yoff = hdr.get('YOFFSET', 0.0)
+    return float(xoff or 0.0), float(yoff or 0.0)
+
+
+def _apply_miri_calibrator_mask(
+    jhat_df,
+    *,
+    miri_mag_min: float | None = None,
+    miri_mag_max: float | None = None,
+    miri_round_max: float | None = None,
+    miri_sharp_min: float | None = None,
+    miri_sharp_max: float | None = None,
+):
+    """Return a boolean mask of star-like MIRI detections suitable as calibrators."""
+    import pandas as pd
+
+    if not isinstance(jhat_df, pd.DataFrame):
+        jhat_df = pd.DataFrame(jhat_df)
+    keep = np.ones(len(jhat_df), dtype=bool)
+    if miri_mag_min is not None and 'mag' in jhat_df.columns:
+        keep &= np.asarray(jhat_df['mag'], dtype=float) >= float(miri_mag_min)
+    if miri_mag_max is not None and 'mag' in jhat_df.columns:
+        keep &= np.asarray(jhat_df['mag'], dtype=float) <= float(miri_mag_max)
+    if miri_round_max is not None and 'roundness1' in jhat_df.columns:
+        keep &= np.abs(np.asarray(jhat_df['roundness1'], dtype=float)) <= float(
+            miri_round_max
+        )
+    if miri_sharp_min is not None and 'sharpness' in jhat_df.columns:
+        keep &= np.asarray(jhat_df['sharpness'], dtype=float) >= float(miri_sharp_min)
+    if miri_sharp_max is not None and 'sharpness' in jhat_df.columns:
+        keep &= np.asarray(jhat_df['sharpness'], dtype=float) <= float(miri_sharp_max)
+    return keep
+
+
 def iterative_sigma_clip_matches(
     align_phot: str,
     ref_table: Table,
@@ -513,9 +552,19 @@ def iterative_sigma_clip_matches(
     dist_limit_arcsec: float = 0.5,
     sigma: float = 2.0,
     max_clip_iter: int = 10,
+    max_residual_arcsec: float | None = None,
+    miri_mag_min: float | None = None,
+    miri_mag_max: float | None = None,
+    miri_round_max: float | None = None,
+    miri_sharp_min: float | None = None,
+    miri_sharp_max: float | None = None,
 ) -> tuple[Table, dict]:
     """
     Crossmatch aligned photometry to a reference table and iteratively clip outliers.
+
+    Optional MIRI morphology / magnitude cuts are applied before matching when
+    those columns exist. An optional hard residual ceiling is applied after
+    sigma-clipping.
 
     Returns a cleaned reference table (matched ref stars that survive clipping)
     and a stats dict describing the clip.
@@ -527,6 +576,23 @@ def iterative_sigma_clip_matches(
     import pandas as pd
 
     jhat_df = pd.read_csv(align_phot, sep=r'\s+')
+    morph_keep = _apply_miri_calibrator_mask(
+        jhat_df,
+        miri_mag_min=miri_mag_min,
+        miri_mag_max=miri_mag_max,
+        miri_round_max=miri_round_max,
+        miri_sharp_min=miri_sharp_min,
+        miri_sharp_max=miri_sharp_max,
+    )
+    n_morph = int(morph_keep.sum())
+    if n_morph == 0:
+        raise RuntimeError('No MIRI sources survive calibrator morphology/mag cuts')
+    if n_morph < len(jhat_df):
+        print(
+            f'  calibrator morph/mag cut: kept {n_morph}/{len(jhat_df)} MIRI sources'
+        )
+    jhat_df = jhat_df.loc[morph_keep].reset_index(drop=True)
+
     jh = SkyCoord(
         ra=np.asarray(jhat_df['ra'], dtype=float) * u.deg,
         dec=np.asarray(jhat_df['dec'], dtype=float) * u.deg,
@@ -545,6 +611,8 @@ def iterative_sigma_clip_matches(
         di = d2d[keep]
         _mn, med, std = sigma_clipped_stats(di, sigma=sigma)
         thr = float(med + sigma * std)
+        if max_residual_arcsec is not None:
+            thr = min(thr, float(max_residual_arcsec))
         new_keep = keep & (d2d <= thr)
         print(
             f'  clip iter {i}: n={int(new_keep.sum())}/{len(matched)} '
@@ -558,14 +626,24 @@ def iterative_sigma_clip_matches(
         if keep.sum() < 10:
             break
 
+    if max_residual_arcsec is not None:
+        hard = d2d <= float(max_residual_arcsec)
+        if hard.sum() < keep.sum():
+            print(
+                f'  hard residual cut ({max_residual_arcsec*1000:.1f} mas): '
+                f'{int(keep.sum())} → {int((keep & hard).sum())}'
+            )
+        keep = keep & hard
+
     good_ref_idx = np.unique(np.asarray(matched['idx_2'], dtype=int)[keep])
     cleaned = ref_table[good_ref_idx]
     stats = {
         'n_match_initial': int(len(matched)),
         'n_match_clipped': int(keep.sum()),
         'n_ref_kept': int(len(cleaned)),
-        'median_d2d_mas': float(np.median(d2d[keep]) * 1000.0),
-        'mean_d2d_mas': float(np.mean(d2d[keep]) * 1000.0),
+        'median_d2d_mas': float(np.median(d2d[keep]) * 1000.0) if keep.any() else float('nan'),
+        'mean_d2d_mas': float(np.mean(d2d[keep]) * 1000.0) if keep.any() else float('nan'),
+        'n_miri_morph': n_morph,
     }
     return cleaned, stats
 
@@ -583,6 +661,13 @@ def refine_alignment_iteratively(
     tol_mas: float = 1.0,
     min_calibrators: int = 20,
     dist_limit_arcsec: float = 0.5,
+    max_residual_arcsec: float | None = None,
+    miri_mag_min: float | None = None,
+    miri_mag_max: float | None = None,
+    miri_round_max: float | None = None,
+    miri_sharp_min: float | None = None,
+    miri_sharp_max: float | None = None,
+    jhat_params: dict | None = None,
 ) -> tuple[object, float | None, int | None]:
     """
     Iteratively prune outlier reference stars and re-run JHAT until dispersion converges.
@@ -604,10 +689,11 @@ def refine_alignment_iteratively(
         raise FileNotFoundError(f'JHAT product not found for refinement: {jhat}')
 
     disp_mas, n_cal = read_dispersion_mas(jhat)
-    guess_offset: object = (0, 0)
+    xshift, yshift = read_jhat_pixel_offset(jhat)
+    guess_offset: object = (xshift, yshift)
     print(
         f'Iterative refinement starting from dispersion={disp_mas} mas, '
-        f'n_calibrators={n_cal}'
+        f'n_calibrators={n_cal}, xshift={xshift:.3f}, yshift={yshift:.3f}'
     )
 
     current_ref = ref_phot
@@ -623,6 +709,12 @@ def refine_alignment_iteratively(
                 ref_table,
                 dist_limit_arcsec=dist_limit_arcsec,
                 sigma=sigma,
+                max_residual_arcsec=max_residual_arcsec,
+                miri_mag_min=miri_mag_min,
+                miri_mag_max=miri_mag_max,
+                miri_round_max=miri_round_max,
+                miri_sharp_min=miri_sharp_min,
+                miri_sharp_max=miri_sharp_max,
             )
         except Exception as exc:
             print(f'  refine iter {it}: clipping failed ({exc}); stopping')
@@ -634,7 +726,33 @@ def refine_alignment_iteratively(
                 f'(<{min_calibrators}); stopping'
             )
             break
-        if stats['n_match_clipped'] >= stats['n_match_initial']:
+
+        # Only re-run JHAT when the matched set actually shrank (sigma-clip /
+        # hard residual). Do NOT treat "matched subset << full master_ref" as
+        # progress — that is always true on the first pass and was forcing a
+        # destructive catalog rewrite that hurt F560W.
+        #
+        # Optional MIRI morph/mag cuts are applied *before* matching, so when
+        # they are active force one cleaned-catalog re-run on iter 1 even if
+        # sigma-clip finds no further outliers.
+        morph_active = any(
+            v is not None
+            for v in (
+                miri_mag_min,
+                miri_mag_max,
+                miri_round_max,
+                miri_sharp_min,
+                miri_sharp_max,
+            )
+        )
+        no_clip_progress = stats['n_match_clipped'] >= stats['n_match_initial']
+        force_morph_pass = (
+            morph_active
+            and it == 1
+            and int(stats.get('n_miri_morph', 0)) > 0
+            and current_ref == ref_phot
+        )
+        if no_clip_progress and not force_morph_pass:
             print(f'  refine iter {it}: no outliers clipped; converged')
             break
 
@@ -654,32 +772,35 @@ def refine_alignment_iteratively(
         if os.path.exists(align_phot):
             shutil.copy2(align_phot, backup_phot)
 
+        # Only seed pixel offsets for F770W-style tight refine (hard residual
+        # ceiling). Seeding large F560W XOFFSET/YOFFSET (~50–130 px) into JHAT
+        # with a cleaned catalog routinely fails matching and destroys the
+        # ~10 mas solutions refine would otherwise recover.
+        if max_residual_arcsec is not None:
+            xshift, yshift = read_jhat_pixel_offset(jhat)
+        else:
+            xshift, yshift = 0.0, 0.0
+
         with working_directory(outdir):
             # soft_fail=False: never replace a refine JHAT product with an
             # unaligned copy; rollback handles worsened iterations instead.
+            align_kw = dict(
+                align_image=align_image,
+                outdir='.',
+                gaia=False,
+                photfilename=cleaned_path,
+                Nbright=min(nbright, len(cleaned)),
+                verbose=verbose,
+                soft_fail=False,
+                jhat_params=jhat_params,
+                xshift=xshift,
+                yshift=yshift,
+            )
             if plot:
                 with plot_saver(outdir, prefix=f'{stem}.refine{it:02d}'):
-                    guess_offset = jwst123.align_jwst_image(
-                        align_image=align_image,
-                        outdir='.',
-                        gaia=False,
-                        photfilename=cleaned_path,
-                        Nbright=min(nbright, len(cleaned)),
-                        plot=True,
-                        verbose=verbose,
-                        soft_fail=False,
-                    )
+                    guess_offset = jwst123.align_jwst_image(plot=True, **align_kw)
             else:
-                guess_offset = jwst123.align_jwst_image(
-                    align_image=align_image,
-                    outdir='.',
-                    gaia=False,
-                    photfilename=cleaned_path,
-                    Nbright=min(nbright, len(cleaned)),
-                    plot=False,
-                    verbose=verbose,
-                    soft_fail=False,
-                )
+                guess_offset = jwst123.align_jwst_image(plot=False, **align_kw)
 
         jhat, align_phot, _ = _jhat_paths(align_image, outdir)
         new_disp, new_ncal = read_dispersion_mas(jhat)
@@ -687,6 +808,23 @@ def refine_alignment_iteratively(
             f'  refine iter {it}: dispersion {disp_mas} → {new_disp} mas '
             f'(n_calibrators={new_ncal})'
         )
+
+        def _restore_backup_and_stop(reason: str) -> None:
+            print(f'  refine iter {it}: {reason}; restoring previous JHAT products and stopping')
+            if os.path.exists(backup_jhat):
+                shutil.copy2(backup_jhat, jhat)
+            if os.path.exists(backup_phot):
+                shutil.copy2(backup_phot, align_phot)
+            for bak in (backup_jhat, backup_phot):
+                if os.path.exists(bak):
+                    os.remove(bak)
+
+        # Failed / soft-failed refine attempts can leave absurd dispersions.
+        if new_disp is not None and new_disp > 500.0:
+            _restore_backup_and_stop(
+                f'refine product unusable (dispersion={new_disp:.1f} mas)'
+            )
+            break
 
         if disp_mas is not None and new_disp is not None:
             if abs(new_disp - disp_mas) < tol_mas:
@@ -701,18 +839,9 @@ def refine_alignment_iteratively(
                         os.remove(bak)
                 break
             if new_disp > disp_mas + tol_mas:
-                print(
-                    f'  refine iter {it}: dispersion worsened '
-                    f'({disp_mas:.3f} → {new_disp:.3f} mas); '
-                    f'restoring previous JHAT products and stopping'
+                _restore_backup_and_stop(
+                    f'dispersion worsened ({disp_mas:.3f} → {new_disp:.3f} mas)'
                 )
-                if os.path.exists(backup_jhat):
-                    shutil.copy2(backup_jhat, jhat)
-                if os.path.exists(backup_phot):
-                    shutil.copy2(backup_phot, align_phot)
-                for bak in (backup_jhat, backup_phot):
-                    if os.path.exists(bak):
-                        os.remove(bak)
                 break
 
         disp_mas, n_cal = new_disp, new_ncal
@@ -748,6 +877,15 @@ def run_alignment(
     refine_sigma: float = 2.0,
     refine_max_iter: int = 5,
     refine_tol_mas: float = 1.0,
+    refine_dist_limit_arcsec: float = 0.5,
+    max_residual_arcsec: float | None = None,
+    miri_mag_min: float | None = None,
+    miri_mag_max: float | None = None,
+    miri_round_max: float | None = None,
+    miri_sharp_min: float | None = None,
+    miri_sharp_max: float | None = None,
+    min_calibrators: int = 20,
+    jhat_params: dict | None = None,
 ) -> tuple[object, str]:
     """
     Build a reference catalog and align ``align_image`` to it.
@@ -760,6 +898,10 @@ def run_alignment(
 
     If ``refine`` is True, iteratively sigma-clip outlier matches and re-run
     JHAT until the dispersion converges.
+
+    Filter-specific calibrator knobs (``nbright``, JHAT ``objmag_lim`` /
+    morphology cuts, refine residual ceilings) are typically supplied by
+    ``alignment_calibrators`` via the parallel workers.
     """
     if align_image is None:
         raise ValueError('align_image is required')
@@ -774,6 +916,13 @@ def run_alignment(
 
     print(f'Output directory: {outdir}')
     print(f'Align image:      {align_image}')
+    if jhat_params:
+        print(f'JHAT param overrides: {jhat_params}')
+    print(
+        f'Calibrator knobs: nbright={nbright}, refine_sigma={refine_sigma}, '
+        f'dist_limit={refine_dist_limit_arcsec}", '
+        f'max_resid={max_residual_arcsec}"'
+    )
 
     if photfile is not None:
         ref_phot = build_ref_catalog(refs[0] if refs else align_image, outdir, photfile=photfile)
@@ -799,28 +948,21 @@ def run_alignment(
     # JHAT's outsubdir is relative to cwd; run from outdir so products land there.
     # Paths above are absolute so chdir is safe.
     stem = Path(align_image).stem.replace('_cal', '').replace('_i2d', '')
+    align_kw = dict(
+        align_image=align_image,
+        outdir='.',
+        gaia=False,
+        photfilename=ref_phot,
+        Nbright=nbright,
+        verbose=verbose,
+        jhat_params=jhat_params,
+    )
     with working_directory(outdir):
         if plot:
             with plot_saver(outdir, prefix=stem):
-                guess_offset = jwst123.align_jwst_image(
-                    align_image=align_image,
-                    outdir='.',
-                    gaia=False,
-                    photfilename=ref_phot,
-                    Nbright=nbright,
-                    plot=True,
-                    verbose=verbose,
-                )
+                guess_offset = jwst123.align_jwst_image(plot=True, **align_kw)
         else:
-            guess_offset = jwst123.align_jwst_image(
-                align_image=align_image,
-                outdir='.',
-                gaia=False,
-                photfilename=ref_phot,
-                Nbright=nbright,
-                plot=False,
-                verbose=verbose,
-            )
+            guess_offset = jwst123.align_jwst_image(plot=False, **align_kw)
 
     if refine:
         guess_offset, disp_mas, n_cal = refine_alignment_iteratively(
@@ -833,6 +975,15 @@ def run_alignment(
             sigma=refine_sigma,
             max_iter=refine_max_iter,
             tol_mas=refine_tol_mas,
+            min_calibrators=min_calibrators,
+            dist_limit_arcsec=refine_dist_limit_arcsec,
+            max_residual_arcsec=max_residual_arcsec,
+            miri_mag_min=miri_mag_min,
+            miri_mag_max=miri_mag_max,
+            miri_round_max=miri_round_max,
+            miri_sharp_min=miri_sharp_min,
+            miri_sharp_max=miri_sharp_max,
+            jhat_params=jhat_params,
         )
         print(f'Refined dispersion_mas={disp_mas}, n_calibrators={n_cal}')
 

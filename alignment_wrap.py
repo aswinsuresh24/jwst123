@@ -17,15 +17,15 @@ Steps
 3. Align MIRI frames filter-by-filter from blue→red (F560W, then F770W,
    then F1000W, …). Within each filter, frames are aligned in parallel
    (``--workers``).
-4. If reference-image alignment fails, or succeeds but exceeds
-   ``--max-nircam-dispersion-mas`` (default 70 mas), fall back to relative
-   MIRI→MIRI alignment against the successfully aligned frame that is closest
-   in wavelength and has the largest sky overlap (using completed bluer
-   filters, then same-filter successes that passed the quality cut). Absolute
-   dispersion is the quadrature sum of the parent absolute dispersion and the
-   new relative dispersion. Provenance (``ALGNMODE``, ``ALGNREF``, ``ALGNTO``)
-   is written to the JHAT header (``REFERENCE`` or ``MIRI_REL``). If MIRI_REL
-   also fails, the prior reference alignment product is kept.
+4. If reference-image alignment fails, or succeeds but exceeds the per-filter
+   REFERENCE quality-hold threshold (or uniform ``--max-nircam-dispersion-mas``),
+   try relative MIRI→MIRI alignment against the best overlapping parent
+   (quality-aware: low parent dispersion, modest wavelength gap, large
+   overlap). Absolute dispersion is the quadrature sum of the parent absolute
+   dispersion and the new relative dispersion. MIRI_REL is kept only when it
+   improves on REFERENCE; otherwise the REFERENCE WCS is retained as SUCCESS.
+   Provenance (``ALGNMODE``, ``ALGNREF``, ``ALGNTO``) is written to the JHAT
+   header. F560W never quality-holds (must stay on REFERENCE).
 5. Reject MIRI frames whose cumulative (union) reference footprint coverage
    of the MIRI ROI is below ``--min-ref-overlap-frac`` (default 0.02) before
    alignment (logged to console / overlap summaries only; they never enter
@@ -200,13 +200,14 @@ def _normalize_align_mode(align_mode: str | None) -> str:
 
 def _is_reference_quality_hold(row: AlignmentSummaryRow) -> bool:
     """
-    True for a REFERENCE solution held as FAILURE after the dispersion cut.
+    True for a REFERENCE solution held as PENDING after the dispersion cut.
 
-    These rows keep finite metrics / JHAT paths so MIRI_REL can be tried, and
-    so the REFERENCE product can be restored to SUCCESS if fallback fails.
+    These rows keep finite metrics / JHAT paths so MIRI_REL can be tried.
+    They are omitted from the live alignment summary until MIRI_REL finishes
+    (kept if improved) or the REFERENCE solution is restored as SUCCESS.
     """
     return (
-        row.status == 'FAILURE'
+        row.status == 'PENDING'
         and _normalize_align_mode(row.align_mode) == 'REFERENCE'
         and isinstance(row.dispersion_mas, float)
         and bool(row.aligned_path)
@@ -782,6 +783,15 @@ def create_parser(default_data_dir: Path) -> argparse.ArgumentParser:
         help='Maximum iterative refinement iterations (default: 5).',
     )
     parser.add_argument(
+        '--no-filter-calibrators',
+        action='store_true',
+        help=(
+            'Disable filter-specific calibrator selection (F770W currently '
+            'uses lower Nbright and tighter refine residual clipping). '
+            'Default: enabled.'
+        ),
+    )
+    parser.add_argument(
         '--no-fallback',
         action='store_true',
         help=(
@@ -793,11 +803,13 @@ def create_parser(default_data_dir: Path) -> argparse.ArgumentParser:
     parser.add_argument(
         '--max-nircam-dispersion-mas',
         type=float,
-        default=70.0,
+        default=None,
         help=(
-            'If NIRCam alignment succeeds but final mean dispersion exceeds '
-            'this threshold (mas), treat it as a quality failure and attempt '
-            'MIRI→MIRI relative fallback (default: 70). Set <= 0 to disable.'
+            'Uniform REFERENCE quality-hold threshold (mas): if REFERENCE '
+            'dispersion exceeds this value, try MIRI_REL and keep it only when '
+            'it improves the absolute dispersion. Default: per-filter map '
+            '(F560W disabled; F770W 50; F1000W 35; F1130W 55; F1280W/F1500W/'
+            'F1800W 50; F2100W 65). Set <= 0 to disable the quality hold.'
         ),
     )
     parser.add_argument(
@@ -1154,14 +1166,9 @@ def _format_worker_done(result) -> str:
             f'DONE  {base}  {filt}  SUCCESS  align_mode={mode}  '
             f'dispersion_mas={disp_s}'
         )
-    if (
-        status == 'FAILURE'
-        and mode == 'REFERENCE'
-        and isinstance(disp, float)
-        and str(result.row.get('aligned_path', 'NA')) != 'NA'
-    ):
+    if status == 'PENDING':
         return (
-            f'DONE  {base}  {filt}  FAILURE  align_mode={mode}  '
+            f'DONE  {base}  {filt}  PENDING  align_mode={mode}  '
             f'dispersion_mas={disp_s} (over threshold; try MIRI_REL)'
         )
     if status in ('SKIP', 'REJECTED'):
@@ -1277,8 +1284,9 @@ def align_from_frames(
     refine: bool = True,
     refine_sigma: float = 2.0,
     refine_max_iter: int = 5,
+    use_filter_calibrators: bool = True,
     fallback: bool = True,
-    max_nircam_dispersion_mas: float | None = 70.0,
+    max_nircam_dispersion_mas: float | None = None,
     min_ref_overlap_frac: float = 0.02,
     summary_outfile: Path | None = None,
     workers: int = 1,
@@ -1290,13 +1298,13 @@ def align_from_frames(
     For each filter wave:
       1. Align all frames to overlapping reference images in parallel
          (``align_mode=REFERENCE`` on success)
-      2. Run MIRI→MIRI fallback in parallel for failures and for REFERENCE
-         solutions whose dispersion exceeds ``max_nircam_dispersion_mas``
-         (``align_mode=MIRI_REL``; parents = successes from bluer filters and
-         from this filter's completed REFERENCE successes that passed the
-         quality cut)
+      2. Run MIRI→MIRI fallback in parallel for hard failures and for REFERENCE
+         solutions whose dispersion exceeds the per-filter (or uniform CLI)
+         quality-hold threshold. MIRI_REL is kept only when its absolute
+         dispersion improves on REFERENCE. Parents prefer high-quality
+         overlapping successes (usually bluer), not merely closest wavelength.
       3. Optionally repeat fallback once so same-filter MIRI_REL successes can
-         parent remaining failures
+         parent remaining hard failures
 
     Summary ``status`` is binary ``SUCCESS``/``FAILURE``; method is in
     ``align_mode``. ``run_alignment`` is accepted for API compatibility;
@@ -1305,16 +1313,19 @@ def align_from_frames(
     """
     del run_alignment  # workers import alignment_dispersion.run_alignment
 
+    from alignment_calibrators import FILTER_MAX_REFERENCE_DISPERSION_MAS
     from alignment_fallback import (
         SuccessfulAlignment,
-        select_fallback_parent,
+        filter_wavelength_um,
+        rank_fallback_parents,
     )
     from alignment_parallel import run_fallback_align_job, run_nircam_align_job
 
     repo_str = str((repo or _resolve_repo_root(None)).resolve())
     workers = max(1, int(workers))
+    # CLI: None → per-filter map; <=0 → disable; >0 → uniform override.
     if max_nircam_dispersion_mas is not None and max_nircam_dispersion_mas <= 0:
-        max_nircam_dispersion_mas = None
+        max_nircam_dispersion_mas = 0.0  # sentinel: disabled for all filters
 
     # Drop low-overlap frames before any alignment work. These remain in
     # overlap_summary* only and are omitted from alignment_summary.txt.
@@ -1333,46 +1344,81 @@ def align_from_frames(
     def flush_summary() -> None:
         if summary_outfile is None:
             return
-        write_alignment_summary(rows, summary_outfile)
+        # Omit PENDING quality-holds until MIRI_REL finishes or is exhausted.
+        public = [r for r in rows if r.status != 'PENDING']
+        write_alignment_summary(public, summary_outfile)
+
+    def _finalize_quality_hold_keep_reference(
+        prev: AlignmentSummaryRow, *, reason: str
+    ) -> None:
+        """
+        Keep the REFERENCE solution after MIRI_REL does not improve it.
+
+        The per-filter dispersion cut is a *try MIRI_REL* trigger, not a hard
+        reject: a usable REFERENCE WCS remains SUCCESS when fallback cannot
+        beat it.
+        """
+        nonlocal n_ok
+        final = AlignmentSummaryRow(
+            miri_path=prev.miri_path,
+            filter=prev.filter,
+            status='SUCCESS',
+            n_calibrators=prev.n_calibrators,
+            dispersion_mas=prev.dispersion_mas,
+            aligned_path=prev.aligned_path,
+            align_mode=_normalize_align_mode(prev.align_mode),
+            original_ref=prev.original_ref,
+            aligned_to=prev.aligned_to,
+            ref_overlap_frac=prev.ref_overlap_frac,
+        )
+        idx = rows.index(prev)
+        rows[idx] = final
+        row_by_miri[prev.miri_path] = final
+        if isinstance(final.dispersion_mas, float) and final.aligned_path not in (
+            None,
+            'NA',
+        ):
+            successes.append(
+                SuccessfulAlignment(
+                    miri_path=final.miri_path,
+                    jhat_path=str(final.aligned_path),
+                    filter=final.filter,
+                    wavelength_um=filter_wavelength_um(final.filter),
+                    dispersion_mas=float(final.dispersion_mas),
+                    relative_dispersion_mas=float(final.dispersion_mas),
+                    align_mode='REFERENCE',
+                    original_ref=str(final.original_ref),
+                    aligned_to=str(final.aligned_to),
+                    photfile=None,
+                )
+            )
+            n_ok += 1
+        print(
+            f'DONE  {Path(prev.miri_path).name}  {prev.filter}  SUCCESS  '
+            f'align_mode=REFERENCE  dispersion_mas={final.dispersion_mas:.3f} '
+            f'({reason})',
+            flush=True,
+        )
+        flush_summary()
 
     def record_result(result, *, count_fallback: bool = False) -> None:
         nonlocal n_ok, n_fallback, failures
         row = AlignmentSummaryRow(**result.row)
         prev = row_by_miri.get(result.miri_path)
 
-        # Keep a prior REFERENCE quality-hold product when MIRI_REL fails.
+        # MIRI_REL did not improve a REFERENCE quality hold: keep REFERENCE.
         if (
             not result.ok
             and result.mode == 'fallback'
             and prev is not None
             and _is_reference_quality_hold(prev)
         ):
-            kept = AlignmentSummaryRow(
-                miri_path=prev.miri_path,
-                filter=prev.filter,
-                status='SUCCESS',
-                n_calibrators=prev.n_calibrators,
-                dispersion_mas=prev.dispersion_mas,
-                aligned_path=prev.aligned_path,
-                align_mode=_normalize_align_mode(prev.align_mode),
-                original_ref=prev.original_ref,
-                aligned_to=prev.aligned_to,
-                ref_overlap_frac=prev.ref_overlap_frac,
-            )
-            idx = rows.index(prev)
-            rows[idx] = kept
-            row_by_miri[result.miri_path] = kept
-            n_ok += 1
-            print(
-                f'DONE  {Path(result.miri_path).name}  {result.filter}  '
-                f'SUCCESS  align_mode=REFERENCE  '
-                f'dispersion_mas={kept.dispersion_mas:.3f} '
-                f'(kept after MIRI_REL failed quality-cut fallback)',
-                flush=True,
-            )
+            why = 'MIRI_REL did not improve REFERENCE'
+            if result.error:
+                why = f'{why}: {result.error}'
+            _finalize_quality_hold_keep_reference(prev, reason=why)
             if verbose and result.error:
                 print(f'  detail: {result.error}', file=sys.stderr, flush=True)
-            flush_summary()
             return
 
         if prev is None:
@@ -1423,13 +1469,38 @@ def align_from_frames(
         refine=refine,
         refine_sigma=refine_sigma,
         refine_max_iter=refine_max_iter,
+        use_filter_calibrators=use_filter_calibrators,
         max_nircam_dispersion_mas=max_nircam_dispersion_mas,
     )
 
-    if max_nircam_dispersion_mas is not None:
+    if use_filter_calibrators:
+        from alignment_calibrators import (
+            F770W_CALIBRATOR_SETTINGS,
+            describe_calibrator_settings,
+        )
+
         print(
-            f'REFERENCE quality cut: dispersion > '
-            f'{max_nircam_dispersion_mas:.1f} mas → try MIRI_REL fallback'
+            'Filter calibrators: F770W → '
+            f'{describe_calibrator_settings(F770W_CALIBRATOR_SETTINGS)}'
+        )
+    else:
+        print('Filter calibrators: disabled (--no-filter-calibrators)')
+
+    if max_nircam_dispersion_mas == 0.0:
+        print('REFERENCE quality hold: disabled')
+    elif max_nircam_dispersion_mas is not None:
+        print(
+            f'REFERENCE quality hold: uniform > '
+            f'{max_nircam_dispersion_mas:.1f} mas → try MIRI_REL '
+            f'(keep only if improved)'
+        )
+    else:
+        parts = []
+        for name, thr in FILTER_MAX_REFERENCE_DISPERSION_MAS.items():
+            parts.append(f'{name}:{"off" if thr is None else f"{thr:.0f}"}')
+        print(
+            'REFERENCE quality hold (per filter, mas → try MIRI_REL; '
+            f'keep only if improved): {", ".join(parts)}'
         )
 
     for filt, group in groups.items():
@@ -1490,17 +1561,27 @@ def align_from_frames(
 
                 fb_jobs = []
                 for miri in ordered_need:
-                    parent, ov_frac = select_fallback_parent(
-                        miri, filt, successes
+                    ranked = rank_fallback_parents(
+                        miri, filt, successes, max_parents=5
                     )
-                    if parent is None:
+                    if not ranked:
                         continue
+                    prev_row = row_by_miri.get(miri)
+                    ref_disp = (
+                        float(prev_row.dispersion_mas)
+                        if prev_row is not None
+                        and _is_reference_quality_hold(prev_row)
+                        and isinstance(prev_row.dispersion_mas, float)
+                        else None
+                    )
                     fb_jobs.append(
                         {
                             **pending[miri],
                             'mode': 'fallback',
-                            'parent': asdict(parent),
-                            'overlap_fraction': ov_frac,
+                            'parent': asdict(ranked[0][0]),
+                            'parents': [asdict(p) for p, _ov in ranked],
+                            'overlap_fraction': ranked[0][1],
+                            'reference_dispersion_mas': ref_disp,
                         }
                     )
 
@@ -1528,36 +1609,16 @@ def align_from_frames(
                 if not any_new:
                     break
 
-        # Accept remaining REFERENCE quality-hold products when no MIRI_REL
-        # parent was available (or fallback was disabled).
+        # Finalize remaining REFERENCE quality-holds when no MIRI_REL parent
+        # was available (or fallback was disabled): keep the REFERENCE WCS.
         for miri in list(pending):
             row = row_by_miri.get(miri)
             if row is None or not _is_reference_quality_hold(row):
                 continue
-            kept = AlignmentSummaryRow(
-                miri_path=row.miri_path,
-                filter=row.filter,
-                status='SUCCESS',
-                n_calibrators=row.n_calibrators,
-                dispersion_mas=row.dispersion_mas,
-                aligned_path=row.aligned_path,
-                align_mode=_normalize_align_mode(row.align_mode),
-                original_ref=row.original_ref,
-                aligned_to=row.aligned_to,
-                ref_overlap_frac=row.ref_overlap_frac,
+            _finalize_quality_hold_keep_reference(
+                row,
+                reason='no MIRI_REL parent; keeping REFERENCE solution',
             )
-            idx = rows.index(row)
-            rows[idx] = kept
-            row_by_miri[miri] = kept
-            n_ok += 1
-            print(
-                f'DONE  {Path(miri).name}  {kept.filter}  SUCCESS  '
-                f'align_mode=REFERENCE  '
-                f'dispersion_mas={kept.dispersion_mas:.3f} '
-                f'(no MIRI_REL parent; keeping REFERENCE despite quality cut)',
-                flush=True,
-            )
-            flush_summary()
 
         # Final failure tally for this filter wave.
         wave_failures = [
@@ -1719,6 +1780,7 @@ def main(argv: list[str] | None = None) -> int:
             refine=not args.no_refine,
             refine_sigma=args.refine_sigma,
             refine_max_iter=args.refine_max_iter,
+            use_filter_calibrators=not args.no_filter_calibrators,
             fallback=not args.no_fallback,
             max_nircam_dispersion_mas=args.max_nircam_dispersion_mas,
             min_ref_overlap_frac=args.min_ref_overlap_frac,

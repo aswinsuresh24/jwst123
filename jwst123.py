@@ -765,6 +765,7 @@ def align_jwst_image(
     plot=False,
     soft_fail=True,
     soft_fail_pix=2.0,
+    jhat_params=None,
 ):
     """
     Align ``align_image`` with JHAT.
@@ -779,10 +780,17 @@ def align_jwst_image(
         Median-residual threshold in detector pixels (default 2.0). The old
         default of 1.0 was too aggressive for MIRI F770W/longer filters, where
         good solutions often land at ~1.1–1.5 pix before refine.
+    jhat_params : dict or None
+        Optional overrides merged into ``strict_jwst_params`` /
+        ``strict_gaia_params`` (e.g. tighter ``objmag_lim`` /
+        ``sharpness_lim`` for F770W).
     """
     print(f"Aligning {os.path.basename(align_image)} to {'Gaia' if gaia else photfilename.replace('.phot.txt', '.fits')}")
-    params = strict_gaia_params if gaia else strict_jwst_params
-    if plot: params['showplots'] = 2
+    params = dict(strict_gaia_params if gaia else strict_jwst_params)
+    if jhat_params:
+        params.update(jhat_params)
+    if plot:
+        params['showplots'] = 2
     try:
         wv = float(os.path.basename(align_image).split('_jhat')[0][1:4])
         if wv > 220:
@@ -830,9 +838,14 @@ def align_jwst_image(
     # Retry with relaxed params / guess shift when the strict solution is still
     # worse than one MIRI/NIRCam pixel. Keeping this gate at 1 pix preserves the
     # historical retry behavior even when soft_fail_pix is larger.
+    # Preserve caller JHAT overrides (e.g. F770W objmag/morphology cuts) so
+    # the relaxed retry does not silently re-admit bright PAH contaminants.
     if disp_fn_med/pixscale > retry_pix:
-        params = relaxed_gaia_params if gaia else relaxed_jwst_params
-        if plot: params['showplots'] = 2 
+        params = dict(relaxed_gaia_params if gaia else relaxed_jwst_params)
+        if jhat_params:
+            params.update(jhat_params)
+        if plot:
+            params['showplots'] = 2
         try:
             run_jhat(align_image=align_image, outdir=outdir, params=params, gaia=gaia, photfilename=photfilename, 
                     xshift=xshift, yshift=yshift, Nbright=Nbright, verbose=verbose)
@@ -867,6 +880,15 @@ def align_jwst_image(
     # the median residual is still above soft_fail_pix. For MIRI (~0.062"/pix)
     # the old 1-pixel cut (~62 mas) rejected many usable F770W solutions that
     # refine can tighten; default soft_fail_pix=2.0 keeps those (~124 mas).
+    def _finite_arcsec(val, default=99.99):
+        try:
+            v = float(val)
+            if np.isfinite(v):
+                return v
+        except Exception:
+            pass
+        return float(default)
+
     if soft_fail and disp_fn_med/pixscale > soft_fail_pix:
         print(
             f'Copying unaligned {align_image} to output, redo alignment '
@@ -880,15 +902,19 @@ def align_jwst_image(
 
         shutil.copy(align_image, jhat_image)
         with fits.open(jhat_image, mode='update') as filehandle:
+            # Sanitize NaNs from failed JHAT/dispersion attempts — FITS headers
+            # reject floating NaN and previously aborted soft-fail restores.
+            d_mu = _finite_arcsec(disp_in_mu)
+            d_med = _finite_arcsec(disp_in_med)
             if gaia:
-                filehandle[0].header['GADISPM'] = disp_in_mu
-                filehandle[0].header['GADISPD'] = disp_in_med
-                filehandle[0].header['GADISPS'] = 'NaN'
+                filehandle[0].header['GADISPM'] = d_mu
+                filehandle[0].header['GADISPD'] = d_med
+                filehandle[0].header['GADISPS'] = d_med
                 filehandle[0].header['GANCAL'] = 0
             else:
-                filehandle[0].header['JWDISPM'] = disp_in_mu
-                filehandle[0].header['JWDISPD'] = disp_in_med
-                filehandle[0].header['JWDISPS'] = 'NaN'
+                filehandle[0].header['JWDISPM'] = d_mu
+                filehandle[0].header['JWDISPD'] = d_med
+                filehandle[0].header['JWDISPS'] = d_med
                 filehandle[0].header['JWNCAL'] = 0
     elif disp_fn_med/pixscale > retry_pix:
         print(
