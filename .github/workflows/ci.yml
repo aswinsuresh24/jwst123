@@ -38,17 +38,25 @@ jobs:
       - name: Install package (editable) with test extras
         run: |
           python -m pip install --upgrade pip
+          # Custom JHAT comes from requirements.txt (jhat @ file:./extdeps/jhat).
           python -m pip install -e ".[dev]"
+
+      - name: Verify custom JHAT
+        run: |
+          python -c "import jhat; print(jhat.__version__, jhat.__file__); assert str(jhat.__version__).endswith('+jwst123'), jhat.__version__"
 
       - name: Verify console scripts
         run: |
           download --help
+          jwst-download --help
           align --help
           mosaic --help
           link-raw --help
           image-overlap --help
+          region --help
           illuminated-s-region --help
           relative-align --help
+          alignment-wrap --help
           apply-gwcs --help
           catalog --help
 

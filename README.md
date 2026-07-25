@@ -14,7 +14,7 @@ building mosaics / coadds, and preparing DOLPHOT runs.
 | `extdeps/` | Vendored / customized external packages (see below) |
 | `extdeps/jhat/` | **Custom JHAT build for this repository** (not PyPI) |
 | `pyproject.toml` | Package metadata; dependencies loaded from `requirements.txt` |
-| `requirements.txt` | Pinned Python dependencies (JHAT excluded; install from `extdeps/jhat`) |
+| `requirements.txt` | Pinned Python dependencies (includes local `jhat @ file:./extdeps/jhat`) |
 
 ### Package modules
 
@@ -80,23 +80,25 @@ Use this tree for all JHAT-backed alignment code in jwst123, including:
 - `jwst123.alignment.relative_align` (master catalogs, iterative refine, F560W/F770W knobs)
 - `jwst123.alignment.alignment_wrap` (REFERENCE → MIRI_REL pipeline)
 
-Install it from `extdeps/jhat` (see Installation). Do **not**
-`pip install jhat` from PyPI for this project unless you intentionally want
-upstream instead of the custom build. Details and version marking
-(`0.3.7+jwst123`) are in [`extdeps/jhat/README.md`](extdeps/jhat/README.md).
+`pip install -e .` (or `pip install -e ".[dev]"`) installs this tree
+automatically via the `jhat @ file:./extdeps/jhat` entry in
+`requirements.txt`. Do **not** `pip install jhat` from PyPI for this project
+unless you intentionally want upstream instead of the custom build. Details and
+version marking (`0.3.7+jwst123`) are in
+[`extdeps/jhat/README.md`](extdeps/jhat/README.md).
 
 ## Requirements
 
 - **Python 3.12** (3.11 also supported)
 - External **DOLPHOT** binaries if you run PSF photometry
   ([DOLPHOT](http://americano.dolphinsim.com/dolphot/))
-- The custom JHAT package under `extdeps/jhat` (installed with the steps below)
+- The custom JHAT package under `extdeps/jhat` (pulled in by `pip install -e .`)
 
 ## Installation
 
 The same conda + pip flow works on macOS and Linux/Ubuntu. Pinned dependencies
-are declared in `requirements.txt` (via `pyproject.toml`). JHAT is installed
-from `extdeps/jhat`, not from PyPI.
+are declared in `requirements.txt` (via `pyproject.toml`), including the local
+custom JHAT path dependency.
 
 ### macOS and Linux / Ubuntu
 
@@ -112,11 +114,12 @@ on both platforms) before the editable install:
 conda install -c conda-forge hdf5 blosc pytables -y
 ```
 
-Then, from the repository root, install **custom JHAT** and **jwst123**
-together:
+Then, from the repository root:
 
 ```bash
-pip install -e ./extdeps/jhat -e .
+pip install -e .
+# or, with test/notebook extras:
+pip install -e ".[dev]"
 ```
 
 If `tables` still cannot find HDF5 on macOS Homebrew:
@@ -125,14 +128,14 @@ If `tables` still cannot find HDF5 on macOS Homebrew:
 brew install hdf5 c-blosc
 export HDF5_DIR="$(brew --prefix hdf5)"
 export BLOSC_DIR="$(brew --prefix c-blosc)"
-pip install -e ./extdeps/jhat -e .
+pip install -e .
 ```
 
 On Ubuntu, if you prefer system packages instead of conda HDF5:
 
 ```bash
 sudo apt-get install -y libhdf5-dev libblosc-dev
-pip install -e ./extdeps/jhat -e .
+pip install -e .
 ```
 
 ### Verify
@@ -140,14 +143,13 @@ pip install -e ./extdeps/jhat -e .
 ```bash
 python -c "import jhat, jwst123; print(jhat.__version__, jhat.__file__); print(jwst123.__version__)"
 # jhat.__version__ should be 0.3.7+jwst123
-# jhat.__file__ should point under .../extdeps/jhat/jhat/
 download --help
 alignment-wrap --help
 ```
 
-This install path was validated on macOS with Python 3.12
-(`conda create -n jwst123 python=3.12 pip` then
-`pip install -e ./extdeps/jhat -e .`). The same steps apply on Linux/Ubuntu.
+This install path was validated with Python 3.12
+(`conda create -n jwst123 python=3.12 pip` then `pip install -e .`). The same
+steps apply on macOS and Linux/Ubuntu.
 ## Quick start
 
 ### Download JWST data
