@@ -26,7 +26,7 @@ pip install stpsf
 
 ## Description
 
-jwst123 is designed to be run in two steps in a working directory that contains your images: image alignment using jwst123.py and image coaddition using mosaic.py. 
+jwst123 is designed to be run in two steps in a working directory that contains your images: image alignment using `jwst123.py` and image coaddition using `mosaic.py`. 
 
 If you want to download public archival images for a particular target, use `jwst_download.py` with the coordinates and search radius.
 
@@ -56,6 +56,7 @@ options:
   --nmax               Maximum number of images in a single dolphot run
   --spec_groups        List of images to be grouped together (this forces certain images to be in the same group)
   --drizzle_all        Create mosaics in all filters?
+```
 
 DOLPHOT can be run using `dolphot -pdolphot.param` and will produce data products in the directories set up by `mosaic.py`
 
